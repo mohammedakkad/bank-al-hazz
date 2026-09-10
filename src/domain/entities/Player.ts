@@ -34,6 +34,7 @@ export class Player {
 
   get id() { return this.props.id; }
   get nickname() { return this.props.nickname; }
+  get tokenColor() { return this.props.tokenColor; }
   get money() { return this.props.money; }
   get position() { return this.props.position; }
   get ownedTileIds() { return this.props.ownedTileIds; }
