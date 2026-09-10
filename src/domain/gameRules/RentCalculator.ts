@@ -11,5 +11,9 @@ export type BuildingLevel = 0 | 1 | 2 | 3 | 4 | 5;
  */
 export function calculateRent(tile: PropertyTile, level: BuildingLevel): Money {
   if (level === 0) return Money.of(tile.baseRent);
-  return Money.of(tile.rentPerLevel[level - 1]);
+  const rent = tile.rentPerLevel[level - 1];
+  if (rent === undefined) {
+    throw new Error(`RentCalculator: no rent defined for level ${level}`);
+  }
+  return Money.of(rent);
 }
