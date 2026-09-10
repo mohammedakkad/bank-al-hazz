@@ -1,0 +1,71 @@
+import { memo } from 'react';
+import type { BoardTile as BoardTileData } from '../../../domain/entities/BoardTile';
+import { COLOR_GROUP_HEX } from '../../../shared/constants/colorGroups';
+import { TILE_ICONS, getUtilityIcon } from './tileIcons';
+
+export interface BoardTileProps {
+  readonly tile: BoardTileData;
+  readonly isCorner: boolean;
+  readonly ownerColor?: string | undefined;
+  readonly isSelected: boolean;
+  readonly onSelect: (tileId: number) => void;
+}
+
+function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }: BoardTileProps) {
+  const isProperty = tile.type === 'property';
+  const Icon = tile.type === 'utility' ? getUtilityIcon(tile.name) : TILE_ICONS[tile.type];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(tile.id)}
+      aria-pressed={isSelected}
+      aria-label={tile.name}
+      className={[
+        'relative flex flex-col overflow-hidden border border-board-line bg-board-tile',
+        'transition-colors duration-150 ease-out',
+        'hover:bg-[#1D2740] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400',
+        isSelected ? 'ring-2 ring-amber-400 ring-inset z-10' : '',
+        isCorner ? 'items-center justify-center gap-1 p-1' : 'items-stretch justify-between p-0.5',
+      ].join(' ')}
+    >
+      {isProperty && (
+        <span
+          className="block h-2 w-full shrink-0 sm:h-3"
+          style={{ backgroundColor: COLOR_GROUP_HEX[tile.colorGroup] }}
+          aria-hidden="true"
+        />
+      )}
+
+      {isProperty ? (
+        <span className="flex flex-1 flex-col items-center justify-center gap-0.5 px-0.5 text-center">
+          <span aria-hidden="true" className="text-[10px] leading-none sm:text-sm">
+            {tile.countryFlag}
+          </span>
+          <span className="line-clamp-2 text-[7px] font-medium leading-tight text-white sm:text-[10px]">
+            {tile.name}
+          </span>
+          <span className="text-[6px] text-gray-400 sm:text-[9px]">{tile.purchasePrice}</span>
+        </span>
+      ) : (
+        <span className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
+          {Icon && <Icon aria-hidden="true" className="h-3 w-3 text-amber-400 sm:h-5 sm:w-5" />}
+          <span className="text-[7px] font-medium leading-tight text-white sm:text-[10px]">
+            {tile.name}
+          </span>
+        </span>
+      )}
+
+      {ownerColor && (
+        <span
+          className="absolute bottom-0.5 right-0.5 h-1.5 w-1.5 rounded-full sm:h-2 sm:w-2"
+          style={{ backgroundColor: ownerColor }}
+          aria-hidden="true"
+        />
+      )}
+    </button>
+  );
+}
+
+// memo يمنع إعادة رسم كل الـ40 مربع لما يتحرك لاعب واحد فقط أو يتغير tile واحد.
+export const BoardTile = memo(BoardTileComponent);

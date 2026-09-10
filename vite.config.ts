@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // base: '/bank-al-hazz/' يجب أن يطابق اسم الـ repo على GitHub Pages
@@ -9,5 +9,11 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/shared/testing/setupTests.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
   },
 });

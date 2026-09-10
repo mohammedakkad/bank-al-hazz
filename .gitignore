@@ -29,4 +29,6 @@ pnpm-debug.log*
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db *.tsbuildinfo
+
+.github/agent-skills-main/
