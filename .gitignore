@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Firebase
+.firebase/
+.firebase-debug.log
+firebase-debug.log
+
+# Vite
+.vite/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db 

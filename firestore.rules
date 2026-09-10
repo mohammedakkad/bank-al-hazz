@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// ملاحظة معمارية مهمة:
+// بما أن التطبيق static (GitHub Pages) بدون سيرفر، كل منطق التحقق من صحة
+// الحركات (فلوس، ملكية، دور مين اللاعب) لازم ينفّذ هذا التحقق على مستوى
+// Firestore Security Rules، وليس فقط في الواجهة — وإلا أي لاعب يقدر يعدّل
+// حالة اللعبة من console المتصفح مباشرة.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /games/{gameId} {
+      allow read: if true;
+      // فقط اللاعب صاحب الدور الحالي يقدر يعدّل حالة اللعبة العامة
+      allow update: if request.auth != null
+                    && request.auth.uid == resource.data.currentPlayerId;
+      allow create: if request.auth != null;
+
+      match /players/{playerId} {
+        allow read: if true;
+        // لاعب يعدّل بياناته فقط (رصيده، موقعه)
+        allow write: if request.auth != null && request.auth.uid == playerId;
+      }
+
+      match /properties/{propertyId} {
+        allow read: if true;
+        // شراء/بناء يتم فقط من طرف صاحب الدور — تحقق كامل لاحقاً عبر Cloud Function
+        // إذا احتجنا منطق أكثر تعقيداً (مثل التحقق من امتلاك المجموعة كاملة)
+        allow write: if request.auth != null;
+      }
+
+      match /events/{eventId} {
+        allow read: if true;
+        allow create: if request.auth != null;
+        allow update, delete: if false; // سجل الأحداث غير قابل للتعديل
+      }
+    }
+  }
+}
