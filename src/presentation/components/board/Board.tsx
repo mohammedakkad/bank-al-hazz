@@ -14,7 +14,7 @@ export interface PropertyOwnership {
 export interface BoardProps {
   readonly players: readonly Player[];
   readonly ownershipByTileId?: ReadonlyMap<number, PropertyOwnership>;
-  readonly currentPlayerId?: string;
+  readonly currentPlayerId?: string | undefined;
   readonly onTileSelect?: (tileId: number) => void;
 }
 

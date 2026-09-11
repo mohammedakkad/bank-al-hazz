@@ -9,6 +9,7 @@ export interface PlayerProps {
   readonly ownedTileIds: readonly number[];
   readonly isInJail: boolean;
   readonly isBankrupt: boolean;
+  readonly buildLevels: Readonly<Record<number, number>>;
 }
 
 /**
@@ -29,6 +30,7 @@ export class Player {
       ownedTileIds: [],
       isInJail: false,
       isBankrupt: false,
+      buildLevels: {},
     });
   }
 
@@ -40,6 +42,7 @@ export class Player {
   get ownedTileIds() { return this.props.ownedTileIds; }
   get isInJail() { return this.props.isInJail; }
   get isBankrupt() { return this.props.isBankrupt; }
+  get buildLevels() { return this.props.buildLevels; }
 
   moveTo(newPosition: number): Player {
     return new Player({ ...this.props, position: newPosition });
@@ -76,5 +79,19 @@ export class Player {
 
   ownsTile(tileId: number): boolean {
     return this.props.ownedTileIds.includes(tileId);
+  }
+
+  /**
+   * إضافة جديدة (Phase 3): ترفع مستوى البناء على عقار مملوك بمقدار درجة واحدة (حد أقصى 5).
+   * الدالة لا تتحقق من الملكية أو المال — هذا مسؤولية use case الاستدعاء (نفس نمط acquireProperty
+   * اللي لا يتحقق من كون العقار غير مملوك أصلاً، والتحقق يصير بطبقة application).
+   */
+  upgradeProperty(tileId: number): Player {
+    const currentLevel = this.props.buildLevels[tileId] ?? 0;
+    const nextLevel = Math.min(currentLevel + 1, 5);
+    return new Player({
+      ...this.props,
+      buildLevels: { ...this.props.buildLevels, [tileId]: nextLevel },
+    });
   }
 }

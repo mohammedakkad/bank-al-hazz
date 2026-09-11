@@ -1,7 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { EntryScreen } from './screens/EntryScreen';
 import { LobbyRoomScreen } from './screens/LobbyRoomScreen';
-import App from '../app/App';
+import { GameScreen } from './screens/GameScreen';
 
 /**
  * قرار: HashRouter وليس BrowserRouter.
@@ -17,8 +17,7 @@ export function AppRoutes() {
       <Routes>
         <Route path="/" element={<EntryScreen />} />
         <Route path="/lobby/:roomId" element={<LobbyRoomScreen />} />
-        {/* لسه بلاسهولدر — محتوى شاشة اللعبة الفعلية يُبنى بمرحلة لاحقة */}
-        <Route path="/game/:roomId" element={<App />} />
+        <Route path="/game/:roomId" element={<GameScreen />} />
       </Routes>
     </HashRouter>
   );

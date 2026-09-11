@@ -10,6 +10,7 @@ export interface PlayerDocument {
   readonly ownedTileIds: readonly number[];
   readonly isInJail: boolean;
   readonly isBankrupt: boolean;
+  readonly buildLevels: Readonly<Record<number, number>>;
   readonly joinedAt: FieldValue | number;
 }
 
@@ -22,6 +23,7 @@ export function playerToDocument(player: Player, joinedAt: FieldValue): PlayerDo
     ownedTileIds: player.ownedTileIds,
     isInJail: player.isInJail,
     isBankrupt: player.isBankrupt,
+    buildLevels: player.buildLevels,
     joinedAt,
   };
 }
@@ -42,21 +44,19 @@ export function playerToStateUpdate(player: Player): PlayerStateUpdate {
     ownedTileIds: player.ownedTileIds,
     isInJail: player.isInJail,
     isBankrupt: player.isBankrupt,
+    buildLevels: player.buildLevels,
   };
 }
 
 /**
- * إعادة بناء Player من بيانات Firestore عبر الواجهة العامة فقط (بدون تعديل الـentity).
- *
- * Player.create() يهيّئ الحالة الابتدائية فقط (position=0, ownedTileIds=[], isBankrupt=false)
- * ولا يوجد "constructor" عام يقبل حالة كيفية — وهذا مقصود من تصميم الـentity (immutable
- * + private constructor). للحفاظ على هذا التصميم دون تعديله، نُعيد بناء الحالة الكاملة
- * بتسلسل استدعاءات للدوال العامة الموجودة أصلاً:
- *   - المال يُمرَّر مباشرة كـstartingMoney (create يضبطه كما هو، بدون حاجة لعمليات إضافية)
- *   - الموقع عبر moveTo (أو sendToJail إذا كان في السجن، لأنها تضبط position=10 تلقائياً)
+ * إعادة بناء Player من بيانات Firestore عبر الواجهة العامة فقط (بدون تعديل الـentity
+ * من هذا الملف). Player.create() يهيّئ الحالة الابتدائية فقط، ولا يوجد "constructor"
+ * عام يقبل حالة كيفية — نُعيد بناء الحالة الكاملة بتسلسل استدعاءات للدوال العامة:
+ *   - المال يُمرَّر مباشرة كـstartingMoney
+ *   - الموقع عبر moveTo (أو sendToJail إذا كان بالسجن)
  *   - الممتلكات عبر acquireProperty لكل عقار
- *   - الإفلاس: pay() هي الدالة الوحيدة العامة التي تشتق isBankrupt، فنستدعيها بمبلغ صفر
- *     لإعادة اشتقاق الإفلاس من قيمة المال المُسترجعة نفسها دون تغييره فعلياً
+ *   - مستويات البناء عبر upgradeProperty بالتكرار حتى المستوى المخزَّن (إضافة Phase 3)
+ *   - الإفلاس: pay(صفر) تشتق isBankrupt من قيمة المال نفسها دون تغييره
  */
 export function documentToPlayer(playerId: string, doc: PlayerDocument): Player {
   let player = Player.create(playerId, doc.nickname, doc.tokenColor, Money.of(doc.money));
@@ -69,6 +69,13 @@ export function documentToPlayer(playerId: string, doc: PlayerDocument): Player 
 
   for (const tileId of doc.ownedTileIds) {
     player = player.acquireProperty(tileId);
+  }
+
+  for (const [tileIdKey, level] of Object.entries(doc.buildLevels ?? {})) {
+    const tileId = Number(tileIdKey);
+    for (let i = 0; i < level; i++) {
+      player = player.upgradeProperty(tileId);
+    }
   }
 
   if (doc.isBankrupt) {
