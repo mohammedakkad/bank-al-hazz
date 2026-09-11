@@ -1,18 +1,66 @@
-rules_version='2'
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 10, 11);
+
+    // لازم يكون المستخدم مسجل دخول (حتى لو Anonymous)
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // اللاعب صاحب هذا المستند (uid الخاص فيه يطابق playerId)
+    function isOwner(playerId) {
+      return isSignedIn() && request.auth.uid == playerId;
+    }
+
+    match /games/{gameId} {
+
+      // أي لاعب مسجل دخول يقدر يقرأ حالة اللعبة (لعرضها للجميع لحظيًا)
+      allow read: if isSignedIn();
+
+      // إنشاء غرفة جديدة: أي مستخدم مسجل دخول يقدر ينشئ لعبة
+      allow create: if isSignedIn();
+
+      // تحديث حالة اللعبة العامة (دور مين اللاعب، رقم الجولة):
+      // فقط اللاعب الحالي (currentPlayerId) يقدر يغيّر الدور،
+      // ولازم القيم تكون بالشكل الصحيح (منع بيانات غريبة)
+      allow update: if isSignedIn()
+        && request.auth.uid == resource.data.currentPlayerId
+        && request.resource.data.turnNumber is int
+        && request.resource.data.currentPlayerId is string;
+
+      allow delete: if false; // ما حدا يحذف لعبة (لتجنب الغش/التخريب)
+
+      match /players/{playerId} {
+
+        allow read: if isSignedIn();
+
+        // لاعب يقدر ينشئ مستنده الخاص فقط (uid يطابق playerId)، بشرط شكل بيانات صحيح
+        allow create: if isOwner(playerId)
+          && request.resource.data.money is int
+          && request.resource.data.position is int
+          && request.resource.data.position >= 0
+          && request.resource.data.position < 40
+          && request.resource.data.nickname is string
+          && request.resource.data.nickname.size() >= 2
+          && request.resource.data.nickname.size() <= 20;
+
+        // لاعب يقدر يعدّل مستنده فقط — يمنع لاعب من تعديل رصيد/موقع لاعب ثاني
+        allow update: if isOwner(playerId)
+          && request.resource.data.money is int
+          && request.resource.data.position is int
+          && request.resource.data.position >= 0
+          && request.resource.data.position < 40;
+
+        allow delete: if false;
+      }
+
+      match /log/{logId} {
+        allow read: if isSignedIn();
+        // أي لاعب بالغرفة يقدر يضيف سجل حدث (لعرضه لحظيًا للجميع)
+        allow create: if isSignedIn();
+        allow update, delete: if false; // السجل غير قابل للتعديل بعد الكتابة
+      }
     }
   }
 }
