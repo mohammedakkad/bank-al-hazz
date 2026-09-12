@@ -9,8 +9,11 @@ import { BOARD_TILES, type PropertyTile } from '../../domain/entities/BoardTile'
 import { Money } from '../../domain/valueObjects/Money';
 import type { Player } from '../../domain/entities/Player';
 import type { DiceResult } from '../../domain/gameRules/DiceRoller';
+import { rollDice } from '../../domain/gameRules/DiceRoller';
+import { calculateMove, START_BONUS } from '../../domain/gameRules/MovementRules';
+import { isTripleDoubles, JAIL_FINE } from '../../domain/gameRules/JailRules';
 import type { GameSnapshot, GameLogEntry } from '../../domain/interfaces/IGameRepository';
-import { rollDiceAndMove } from '../../application/useCases/RollDiceAndMoveUseCase';
+import { playJailTurn } from '../../application/useCases/JailTurnUseCase';
 import { buyProperty, type BuyPropertyFailureReason } from '../../application/useCases/BuyPropertyUseCase';
 import { payRent } from '../../application/useCases/PayRentUseCase';
 import { buildOnProperty, type BuildFailureReason } from '../../application/useCases/BuildOnPropertyUseCase';
@@ -26,6 +29,8 @@ const BUY_FAILURE_MESSAGES: Record<BuyPropertyFailureReason, string> = {
 const BUILD_FAILURE_MESSAGES: Record<BuildFailureReason, string> = {
   'not-a-property': 'هذا المربع غير قابل للبناء عليه',
   'not-owned': 'لازم تملك العقار أول قبل البناء عليه',
+  'incomplete-color-group': 'لازم تملك كل عقارات نفس المنطقة قبل ما تقدر تبني',
+  'uneven-building': 'لازم تبني بالتساوي — أكمل باقي عقارات المنطقة لنفس المستوى أول',
   'max-level': 'وصلت الحد الأقصى للبناء على هذا العقار',
   'insufficient-funds': 'رصيدك لا يكفي لتكلفة البناء',
 };
@@ -35,6 +40,8 @@ const DICE_TUMBLE_MS = 550;
 interface PendingBuy {
   readonly tileId: number;
   readonly movedPlayer: Player;
+  /** عدد الـdoubles المتتالية لحد الآن بهذا الدور — لو أكبر من صفر، بعد قرار الشراء/التخطي بيكمل رمي إضافي بدل إنهاء الدور */
+  readonly consecutiveDoubles: number;
 }
 
 export function GameScreen() {
@@ -93,35 +100,99 @@ export function GameScreen() {
     await gameRepository.advanceTurn(roomId, nextPlayerId);
   }
 
-  async function handleRollDice() {
-    if (!me || !roomId || !snapshot || isBusy) return;
-    setIsBusy(true);
+  /**
+   * يحسم "هبوط" اللاعب على مربع بعد الحركة: شراء عقار فاضي (يوقف الدور وينتظر قرار)،
+   * دفع إيجار، أو "اذهب للسجن". يرجع true لو الدور توقف مؤقتًا (بانتظار قرار الشراء).
+   */
+  async function resolveLanding(
+    movedPlayer: Player,
+    othersBeforeMove: readonly Player[],
+    consecutiveDoubles: number,
+  ): Promise<'paused' | 'continue'> {
+    if (!roomId) return 'continue';
+    const tile = BOARD_TILES.find((candidate) => candidate.id === movedPlayer.position);
+    if (!tile) return 'continue';
+
+    if (tile.type === 'go-to-jail') {
+      const jailedPlayer = movedPlayer.sendToJail();
+      await gameRepository.updatePlayerState(roomId, jailedPlayer);
+      setMessage('اذهب إلى السجن!');
+      await endTurn(jailedPlayer.id);
+      return 'paused'; // الدور انتهى فعليًا (مش استمرار عادي)
+    }
+
+    if (tile.type !== 'property') return 'continue';
+
+    const rosterAfterMove = [...othersBeforeMove, movedPlayer];
+    const isOwnedByAnyone = rosterAfterMove.some((player) => player.ownsTile(tile.id));
+
+    if (!isOwnedByAnyone) {
+      setPendingBuy({ tileId: tile.id, movedPlayer, consecutiveDoubles });
+      return 'paused';
+    }
+
+    const rentResult = payRent(movedPlayer, rosterAfterMove, tile.id);
+    if (rentResult.success) {
+      await gameRepository.updatePlayerState(roomId, rentResult.payer);
+      await gameRepository.updatePlayerState(roomId, rentResult.owner);
+      const owner = rosterAfterMove.find((player) => player.ownsTile(tile.id));
+      setMessage(`دفعت ${rentResult.rentAmount.format()} إيجار على ${tile.name}`);
+      await gameRepository.logEvent(roomId, {
+        type: 'rent-paid',
+        playerId: movedPlayer.id,
+        playerNickname: movedPlayer.nickname,
+        ownerId: owner?.id ?? '',
+        ownerNickname: owner?.nickname ?? '',
+        tileId: tile.id,
+        tileName: tile.name,
+        amount: rentResult.rentAmount.value,
+      });
+    }
+    // rentResult.success == false هنا يعني العقار ملكك أنت (self-rent) — لا إجراء مطلوب
+    return 'continue';
+  }
+
+  /**
+   * دور عادي (اللاعب مو بالسجن). بيرمي النرد، يحرّك اللاعب، يحسم الهبوط، وبيكرر
+   * نفسه تلقائيًا لو طلعت doubles (دور إضافي) — إلا لو صارت 3 doubles متتالية، عندها
+   * يروح اللاعب للسجن مباشرة بدل الحركة، بدل أي دور إضافي.
+   */
+  async function performRoll(currentPlayer: Player, consecutiveDoublesSoFar: number) {
+    if (!roomId || !snapshot) return;
     setIsRolling(true);
-    setMessage(null);
 
-    const { dice, player: movedPlayer } = rollDiceAndMove(me);
-
-    // تأخير مقصود: النرد "يتقلّب" بصرياً على HUD قبل ما نطبّق فعلياً نتيجة الحركة
-    // ونحفظها — بدون هذا التأخير ستظهر النتيجة النهائية فوراً بلا أي إحساس بالرمي.
+    const dice = rollDice();
     await new Promise((resolve) => setTimeout(resolve, prefersReducedMotion ? 0 : DICE_TUMBLE_MS));
-
     setLastDiceResult(dice);
     setIsRolling(false);
 
-    await gameRepository.updatePlayerState(roomId, movedPlayer);
     await gameRepository.logEvent(roomId, {
       type: 'dice-rolled',
-      playerId: me.id,
-      playerNickname: me.nickname,
+      playerId: currentPlayer.id,
+      playerNickname: currentPlayer.nickname,
       die1: dice.die1,
       die2: dice.die2,
       total: dice.total,
     });
 
-    const othersBeforeMove = snapshot.players.filter((player) => player.id !== me.id);
-    const rosterAfterMove = [...othersBeforeMove, movedPlayer];
-    const tile = BOARD_TILES.find((candidate) => candidate.id === movedPlayer.position);
+    // القاعدة الرسمية: ثالث doubles متتالية بنفس الدور → للسجن فورًا بدل الحركة
+    if (dice.isDouble && isTripleDoubles(consecutiveDoublesSoFar)) {
+      const jailedPlayer = currentPlayer.sendToJail();
+      await gameRepository.updatePlayerState(roomId, jailedPlayer);
+      setMessage('رميت doubles 3 مرات متتالية — رحت للسجن!');
+      await endTurn(jailedPlayer.id);
+      setIsBusy(false);
+      return;
+    }
 
+    const { newPosition, passedStart } = calculateMove(currentPlayer.position, dice.total);
+    let movedPlayer = currentPlayer.moveTo(newPosition);
+    if (passedStart) {
+      movedPlayer = movedPlayer.receive(Money.of(START_BONUS));
+    }
+    await gameRepository.updatePlayerState(roomId, movedPlayer);
+
+    const tile = BOARD_TILES.find((candidate) => candidate.id === movedPlayer.position);
     if (tile) {
       await gameRepository.logEvent(roomId, {
         type: 'player-moved',
@@ -132,37 +203,92 @@ export function GameScreen() {
       });
     }
 
-    if (tile && tile.type === 'property') {
-      const isOwnedByAnyone = rosterAfterMove.some((player) => player.ownsTile(tile.id));
+    const nextConsecutiveDoubles = dice.isDouble ? consecutiveDoublesSoFar + 1 : 0;
+    const othersBeforeMove = snapshot.players.filter((player) => player.id !== currentPlayer.id);
+    const landingOutcome = await resolveLanding(movedPlayer, othersBeforeMove, nextConsecutiveDoubles);
 
-      if (!isOwnedByAnyone) {
-        setPendingBuy({ tileId: tile.id, movedPlayer });
-        setIsBusy(false);
-        return; // ننتظر قرار اللاعب (شراء/تخطي) قبل إنهاء الدور
-      }
+    if (landingOutcome === 'paused') {
+      // إما وقف بانتظار قرار الشراء (isBusy يضل true لحد قرار المستخدم)، أو انتهى الدور فعليًا (سجن)
+      if (!pendingBuy) setIsBusy(false);
+      return;
+    }
 
-      const rentResult = payRent(movedPlayer, rosterAfterMove, tile.id);
-      if (rentResult.success) {
-        await gameRepository.updatePlayerState(roomId, rentResult.payer);
-        await gameRepository.updatePlayerState(roomId, rentResult.owner);
-        const owner = rosterAfterMove.find((player) => player.ownsTile(tile.id));
-        setMessage(`دفعت ${rentResult.rentAmount.format()} إيجار على ${tile.name}`);
-        await gameRepository.logEvent(roomId, {
-          type: 'rent-paid',
-          playerId: movedPlayer.id,
-          playerNickname: movedPlayer.nickname,
-          ownerId: owner?.id ?? '',
-          ownerNickname: owner?.nickname ?? '',
-          tileId: tile.id,
-          tileName: tile.name,
-          amount: rentResult.rentAmount.value,
-        });
-      }
-      // rentResult.success == false هنا يعني العقار ملكك أنت (self-rent) — لا إجراء مطلوب
+    if (nextConsecutiveDoubles > 0) {
+      // دور إضافي بسبب doubles — نفس اللاعب يرمي مرة ثانية
+      await performRoll(movedPlayer, nextConsecutiveDoubles);
+      return;
     }
 
     await endTurn(movedPlayer.id);
     setIsBusy(false);
+  }
+
+  /** دور اللاعب وهو بالسجن فعليًا — منطق مختلف تمامًا عن الدور العادي */
+  async function performJailRoll(player: Player) {
+    if (!roomId || !snapshot) return;
+    setIsRolling(true);
+
+    const result = playJailTurn(player);
+    await new Promise((resolve) => setTimeout(resolve, prefersReducedMotion ? 0 : DICE_TUMBLE_MS));
+    setLastDiceResult(result.dice);
+    setIsRolling(false);
+
+    await gameRepository.updatePlayerState(roomId, result.player);
+    await gameRepository.logEvent(roomId, {
+      type: 'dice-rolled',
+      playerId: player.id,
+      playerNickname: player.nickname,
+      die1: result.dice.die1,
+      die2: result.dice.die2,
+      total: result.dice.total,
+    });
+
+    if (!result.exitedJail) {
+      setMessage('ما طلعت doubles — لسا بالسجن');
+      await endTurn(player.id);
+      setIsBusy(false);
+      return;
+    }
+
+    setMessage(
+      result.paidFine
+        ? `دفعت غرامة ${JAIL_FINE}$ وطلعت من السجن`
+        : 'طلعت من السجن برمية doubles!',
+    );
+
+    const tile = BOARD_TILES.find((candidate) => candidate.id === result.player.position);
+    if (tile) {
+      await gameRepository.logEvent(roomId, {
+        type: 'player-moved',
+        playerId: result.player.id,
+        playerNickname: result.player.nickname,
+        tileId: tile.id,
+        tileName: tile.name,
+      });
+    }
+
+    // الخروج من السجن ما بيمنح دور إضافي حتى لو كان بـdoubles — القاعدة الرسمية صريحة بهيك
+    const othersBeforeMove = snapshot.players.filter((p) => p.id !== player.id);
+    const landingOutcome = await resolveLanding(result.player, othersBeforeMove, 0);
+    if (landingOutcome === 'paused') {
+      if (!pendingBuy) setIsBusy(false);
+      return;
+    }
+
+    await endTurn(result.player.id);
+    setIsBusy(false);
+  }
+
+  async function handleRollDice() {
+    if (!me || !roomId || !snapshot || isBusy) return;
+    setIsBusy(true);
+    setMessage(null);
+
+    if (me.isInJail) {
+      await performJailRoll(me);
+    } else {
+      await performRoll(me, 0);
+    }
   }
 
   async function handleBuyAccept() {
@@ -172,7 +298,9 @@ export function GameScreen() {
     const tile = BOARD_TILES.find((candidate) => candidate.id === pendingBuy.tileId);
     const result = buyProperty(pendingBuy.movedPlayer, roster, pendingBuy.tileId);
 
+    let finalPlayer = pendingBuy.movedPlayer;
     if (result.success) {
+      finalPlayer = result.player;
       await gameRepository.updatePlayerState(roomId, result.player);
       if (tile) {
         await gameRepository.logEvent(roomId, {
@@ -184,20 +312,32 @@ export function GameScreen() {
           price: 'purchasePrice' in tile ? tile.purchasePrice : 0,
         });
       }
-      await endTurn(result.player.id);
     } else {
       setMessage(BUY_FAILURE_MESSAGES[result.reason]);
-      await endTurn(pendingBuy.movedPlayer.id);
     }
+
+    const consecutiveDoubles = pendingBuy.consecutiveDoubles;
     setPendingBuy(null);
+
+    if (consecutiveDoubles > 0) {
+      await performRoll(finalPlayer, consecutiveDoubles);
+    } else {
+      await endTurn(finalPlayer.id);
+      setIsBusy(false);
+    }
   }
 
   async function handleBuySkip() {
     if (!pendingBuy) return;
-    setIsBusy(true);
-    await endTurn(pendingBuy.movedPlayer.id);
+    const { movedPlayer, consecutiveDoubles } = pendingBuy;
     setPendingBuy(null);
-    setIsBusy(false);
+
+    if (consecutiveDoubles > 0) {
+      await performRoll(movedPlayer, consecutiveDoubles);
+    } else {
+      await endTurn(movedPlayer.id);
+      setIsBusy(false);
+    }
   }
 
   async function handleBuild(tileId: number) {

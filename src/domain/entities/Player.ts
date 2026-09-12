@@ -10,6 +10,8 @@ export interface PlayerProps {
   readonly isInJail: boolean;
   readonly isBankrupt: boolean;
   readonly buildLevels: Readonly<Record<number, number>>;
+  /** عدد الأدوار المتتالية اللي قضاها اللاعب بالسجن بدون ما يطلع منه (يُصفَّر عند الدخول والخروج) */
+  readonly jailTurnsElapsed: number;
 }
 
 /**
@@ -31,6 +33,7 @@ export class Player {
       isInJail: false,
       isBankrupt: false,
       buildLevels: {},
+      jailTurnsElapsed: 0,
     });
   }
 
@@ -43,6 +46,7 @@ export class Player {
   get isInJail() { return this.props.isInJail; }
   get isBankrupt() { return this.props.isBankrupt; }
   get buildLevels() { return this.props.buildLevels; }
+  get jailTurnsElapsed() { return this.props.jailTurnsElapsed; }
 
   moveTo(newPosition: number): Player {
     return new Player({ ...this.props, position: newPosition });
@@ -70,11 +74,16 @@ export class Player {
   }
 
   sendToJail(): Player {
-    return new Player({ ...this.props, isInJail: true, position: 10 });
+    return new Player({ ...this.props, isInJail: true, position: 10, jailTurnsElapsed: 0 });
   }
 
   releaseFromJail(): Player {
-    return new Player({ ...this.props, isInJail: false });
+    return new Player({ ...this.props, isInJail: false, jailTurnsElapsed: 0 });
+  }
+
+  /** يُستدعى لما اللاعب يفشل يطلع من السجن بدور معيّن (ما رمى doubles ولسا ما وصل للدور الإجباري) */
+  recordJailAttempt(): Player {
+    return new Player({ ...this.props, jailTurnsElapsed: this.props.jailTurnsElapsed + 1 });
   }
 
   ownsTile(tileId: number): boolean {

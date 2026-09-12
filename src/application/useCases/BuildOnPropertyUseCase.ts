@@ -1,8 +1,15 @@
 import { Player } from '../../domain/entities/Player';
 import { Money } from '../../domain/valueObjects/Money';
 import { BOARD_TILES } from '../../domain/entities/BoardTile';
+import { ownsEntireColorGroup, isEvenBuildAllowed } from '../../domain/gameRules/ColorGroupRules';
 
-export type BuildFailureReason = 'not-a-property' | 'not-owned' | 'max-level' | 'insufficient-funds';
+export type BuildFailureReason =
+  | 'not-a-property'
+  | 'not-owned'
+  | 'incomplete-color-group'
+  | 'uneven-building'
+  | 'max-level'
+  | 'insufficient-funds';
 
 export type BuildOutcome =
   | { readonly success: true; readonly player: Player }
@@ -18,6 +25,16 @@ export function buildOnProperty(player: Player, tileId: number): BuildOutcome {
 
   if (!player.ownsTile(tileId)) {
     return { success: false, reason: 'not-owned' };
+  }
+
+  // قاعدة مونوبولي الأساسية: ما تقدر تبني إلا بامتلاك كل عقارات نفس المجموعة اللونية
+  if (!ownsEntireColorGroup(player, tile.colorGroup)) {
+    return { success: false, reason: 'incomplete-color-group' };
+  }
+
+  // قاعدة "البناء المتساوي": ما تقدر ترفع مستوى عقار قبل ما يوصل باقي المجموعة لنفس المستوى
+  if (!isEvenBuildAllowed(player, tileId, tile.colorGroup)) {
+    return { success: false, reason: 'uneven-building' };
   }
 
   const currentLevel = player.buildLevels[tileId] ?? 0;

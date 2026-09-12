@@ -3,7 +3,9 @@ import { payRent } from './PayRentUseCase';
 import { Player } from '../../domain/entities/Player';
 import { Money } from '../../domain/valueObjects/Money';
 
-const JERUSALEM_TILE_ID = 6; // property, baseRent: 6
+const JERUSALEM_TILE_ID = 6; // property, baseRent: 6, colorGroup: lightblue
+const ALEPPO_TILE_ID = 8; // نفس مجموعة القدس (lightblue)
+const CAIRO_TILE_ID = 9; // نفس مجموعة القدس (lightblue)
 const START_TILE_ID = 0; // non-property
 
 function makePlayer(id: string, money = 1200) {
@@ -32,6 +34,34 @@ describe('payRent', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.rentAmount.value).toBe(30); // rentPerLevel[0] لمستوى 1
+    }
+  });
+
+  it('يضاعف الإيجار الأساسي لو المالك يملك كل عقارات المجموعة اللونية بدون بناء', () => {
+    const payer = makePlayer('p1');
+    let owner = makePlayer('p2');
+    owner = owner.acquireProperty(JERUSALEM_TILE_ID).acquireProperty(ALEPPO_TILE_ID).acquireProperty(CAIRO_TILE_ID);
+    const result = payRent(payer, [payer, owner], JERUSALEM_TILE_ID);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.rentAmount.value).toBe(12); // baseRent 6 × 2 (مالك المجموعة كاملة)
+    }
+  });
+
+  it('لا يضاعف الإيجار المبني (level > 0) حتى لو المالك يملك المجموعة كاملة', () => {
+    const payer = makePlayer('p1');
+    let owner = makePlayer('p2');
+    owner = owner
+      .acquireProperty(JERUSALEM_TILE_ID)
+      .acquireProperty(ALEPPO_TILE_ID)
+      .acquireProperty(CAIRO_TILE_ID)
+      .upgradeProperty(JERUSALEM_TILE_ID);
+    const result = payRent(payer, [payer, owner], JERUSALEM_TILE_ID);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.rentAmount.value).toBe(30); // rentPerLevel[0] فقط، بدون مضاعفة إضافية
     }
   });
 

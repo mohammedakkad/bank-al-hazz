@@ -2,6 +2,7 @@ import { Player } from '../../domain/entities/Player';
 import { Money } from '../../domain/valueObjects/Money';
 import { BOARD_TILES } from '../../domain/entities/BoardTile';
 import { calculateRent, type BuildingLevel } from '../../domain/gameRules/RentCalculator';
+import { ownsEntireColorGroup } from '../../domain/gameRules/ColorGroupRules';
 
 export type PayRentFailureReason = 'not-a-property' | 'unowned' | 'self-rent';
 
@@ -33,7 +34,8 @@ export function payRent(
   }
 
   const buildLevel = (owner.buildLevels[tileId] ?? 0) as BuildingLevel;
-  const rentAmount = calculateRent(tile, buildLevel);
+  const ownsFullColorGroup = ownsEntireColorGroup(owner, tile.colorGroup);
+  const rentAmount = calculateRent(tile, buildLevel, ownsFullColorGroup);
 
   const updatedPayer = payer.pay(rentAmount);
   const updatedOwner = owner.receive(rentAmount);

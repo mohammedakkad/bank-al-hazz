@@ -11,6 +11,7 @@ export interface PlayerDocument {
   readonly isInJail: boolean;
   readonly isBankrupt: boolean;
   readonly buildLevels: Readonly<Record<number, number>>;
+  readonly jailTurnsElapsed: number;
   readonly joinedAt: FieldValue | number;
 }
 
@@ -24,6 +25,7 @@ export function playerToDocument(player: Player, joinedAt: FieldValue): PlayerDo
     isInJail: player.isInJail,
     isBankrupt: player.isBankrupt,
     buildLevels: player.buildLevels,
+    jailTurnsElapsed: player.jailTurnsElapsed,
     joinedAt,
   };
 }
@@ -45,6 +47,7 @@ export function playerToStateUpdate(player: Player): PlayerStateUpdate {
     isInJail: player.isInJail,
     isBankrupt: player.isBankrupt,
     buildLevels: player.buildLevels,
+    jailTurnsElapsed: player.jailTurnsElapsed,
   };
 }
 
@@ -63,6 +66,9 @@ export function documentToPlayer(playerId: string, doc: PlayerDocument): Player 
 
   if (doc.isInJail) {
     player = player.sendToJail();
+    for (let i = 0; i < (doc.jailTurnsElapsed ?? 0); i++) {
+      player = player.recordJailAttempt();
+    }
   } else {
     player = player.moveTo(doc.position);
   }

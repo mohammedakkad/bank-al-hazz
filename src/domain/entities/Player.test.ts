@@ -47,4 +47,17 @@ describe('Player', () => {
     expect(player.ownsTile(6)).toBe(true);
     expect(player.ownsTile(19)).toBe(false);
   });
+
+  it('يبدأ jailTurnsElapsed بصفر ويرتفع مع recordJailAttempt', () => {
+    const player = makePlayer();
+    expect(player.jailTurnsElapsed).toBe(0);
+    const afterTwoAttempts = player.recordJailAttempt().recordJailAttempt();
+    expect(afterTwoAttempts.jailTurnsElapsed).toBe(2);
+  });
+
+  it('sendToJail و releaseFromJail يصفّران jailTurnsElapsed', () => {
+    const player = makePlayer().recordJailAttempt().recordJailAttempt();
+    expect(player.sendToJail().jailTurnsElapsed).toBe(0);
+    expect(player.releaseFromJail().jailTurnsElapsed).toBe(0);
+  });
 });
