@@ -44,7 +44,8 @@ export function EntryScreen() {
     try {
       const roomId = await gameRepository.createGame(player);
       navigate(`/lobby/${roomId}`);
-    } catch {
+    } catch (error) {
+      console.error('createGame failed:', error);
       setErrorMessage('تعذّر إنشاء الغرفة، حاول مرة أخرى');
     } finally {
       setIsSubmitting(false);
@@ -67,7 +68,8 @@ export function EntryScreen() {
     try {
       await gameRepository.joinGame(roomId, player);
       navigate(`/lobby/${roomId}`);
-    } catch {
+    } catch (error) {
+      console.error('joinGame failed:', error);
       setErrorMessage('تعذّر الانضمام، تأكد من صحة الكود');
     } finally {
       setIsSubmitting(false);
