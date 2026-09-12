@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useGameSession } from '../hooks/useGameSession';
 import { Board, type PropertyOwnership } from '../components/board/Board';
 import { BOARD_TILES, type PropertyTile } from '../../domain/entities/BoardTile';
@@ -32,6 +32,7 @@ interface PendingBuy {
 
 export function GameScreen() {
   const { roomId } = useParams<{ roomId: string }>();
+  const navigate = useNavigate();
   const { userId, gameRepository } = useGameSession();
 
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
@@ -45,6 +46,13 @@ export function GameScreen() {
     const unsubscribe = gameRepository.subscribeToGame(roomId, setSnapshot);
     return unsubscribe;
   }, [roomId, gameRepository]);
+
+  // حماية من دخول مباشر/رابط قديم لشاشة اللعب قبل ما المضيف يبدأ اللعبة فعليًا
+  useEffect(() => {
+    if (snapshot && snapshot.status === 'lobby' && roomId) {
+      navigate(`/lobby/${roomId}`, { replace: true });
+    }
+  }, [snapshot, roomId, navigate]);
 
   const me = useMemo(
     () => snapshot?.players.find((player) => player.id === userId) ?? null,

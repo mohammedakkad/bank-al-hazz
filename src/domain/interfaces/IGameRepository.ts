@@ -18,6 +18,8 @@ export interface GameSnapshot {
 export interface IGameRepository {
   createGame(hostPlayer: Player): Promise<string>;
   joinGame(gameId: string, player: Player): Promise<void>;
+  /** ينقل حالة اللعبة من 'lobby' إلى 'in-progress' — يستدعيها المضيف فقط عند الضغط على "ابدأ اللعبة" */
+  startGame(gameId: string): Promise<void>;
   subscribeToGame(gameId: string, onUpdate: (snapshot: GameSnapshot) => void): () => void;
   updatePlayerState(gameId: string, player: Player): Promise<void>;
   advanceTurn(gameId: string, nextPlayerId: string): Promise<void>;

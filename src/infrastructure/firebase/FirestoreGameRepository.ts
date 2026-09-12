@@ -116,6 +116,17 @@ export class FirestoreGameRepository implements IGameRepository {
     };
   }
 
+  /**
+   * فقط المضيف يستدعي هذه — قاعدة Firestore الحالية على games/{gameId} تشترط
+   * request.auth.uid == resource.data.currentPlayerId، وبما إن currentPlayerId
+   * يُضبط على hostPlayer.id منذ createGame، هذه الكتابة تمر بدون أي تعديل على القواعد.
+   */
+  async startGame(gameId: string): Promise<void> {
+    await updateDoc(gameDocRef(gameId), {
+      status: 'in-progress',
+    });
+  }
+
   async updatePlayerState(gameId: string, player: Player): Promise<void> {
     const stateUpdate = playerToStateUpdate(player);
     await setDoc(doc(playersCollectionRef(gameId), player.id), stateUpdate, { merge: true });
