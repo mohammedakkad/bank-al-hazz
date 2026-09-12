@@ -86,19 +86,17 @@ export function Board({ players, ownershipByTileId, currentPlayerId, onTileSelec
         );
       })}
 
-      {Array.from(playersByTile.entries()).flatMap(([tileId, tilePlayers]) => {
-        const gridPosition = TILE_GRID_POSITIONS.get(tileId);
-        if (!gridPosition) return [];
-        return tilePlayers.map((player, stackIndex) => (
+      {Array.from(playersByTile.entries()).flatMap(([, tilePlayers]) =>
+        tilePlayers.map((player, stackIndex) => (
           <PlayerToken
             key={player.id}
             nickname={player.nickname}
             color={player.tokenColor}
-            gridPosition={gridPosition}
+            position={player.position}
             stackIndex={stackIndex}
           />
-        ));
-      })}
+        )),
+      )}
     </div>
   );
 }

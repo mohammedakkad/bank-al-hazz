@@ -1,65 +1,153 @@
 rules_version = '2';
 
+// ==================================================================
+// السكيما هنا مطابقة لما هو منفَّذ فعلياً بالكود (FirestoreGameRepository +
+// playerMapper.ts) — انظر ملخص الفروقات عن السكيما الأصلية بالشرح المرفق.
+// ==================================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // لازم يكون المستخدم مسجل دخول (حتى لو Anonymous)
-    function isSignedIn() {
+    function isAuthenticated() {
       return request.auth != null;
     }
 
-    // اللاعب صاحب هذا المستند (uid الخاص فيه يطابق playerId)
     function isOwner(playerId) {
-      return isSignedIn() && request.auth.uid == playerId;
+      return isAuthenticated() && request.auth.uid == playerId;
+    }
+
+    function currentPlayerId(gameId) {
+      return get(/databases/$(database)/documents/games/$(gameId)).data.currentPlayerId;
+    }
+
+    function isCurrentPlayer(gameId) {
+      return isAuthenticated() && request.auth.uid == currentPlayerId(gameId);
+    }
+
+    function isValidStatus(status) {
+      return status in ['lobby', 'in-progress', 'finished'];
+    }
+
+    function isValidStatusTransition(oldStatus, newStatus) {
+      return newStatus == oldStatus
+        || (oldStatus == 'lobby' && newStatus == 'in-progress')
+        || (oldStatus == 'in-progress' && newStatus == 'finished');
+    }
+
+    function isValidPosition(pos) {
+      return pos is int && pos >= 0 && pos <= 39;
+    }
+
+    function isValidMoneyState(money, bankrupt) {
+      return money is int
+        && money >= -50000 && money <= 50000
+        && (money < 0 ? bankrupt == true : true);
+    }
+
+    function isValidOwnedTiles(tiles) {
+      return tiles is list && tiles.size() <= 28;
+    }
+
+    function isValidNickname(name) {
+      return name is string && name.size() >= 1 && name.size() <= 40;
+    }
+
+    function hasOnlyAllowedPlayerFields(data) {
+      return data.keys().hasOnly(
+        ['nickname', 'tokenColor', 'money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels', 'joinedAt']
+      );
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function isProfileOnlyUpdate() {
+      return changedKeys().hasOnly(['nickname', 'tokenColor']);
+    }
+
+    function isGameplayUpdate() {
+      return changedKeys().hasOnly(['money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels']);
+    }
+
+    function isMoneyDeltaBounded(oldMoney, newMoney) {
+      return (newMoney - oldMoney) <= 2000 && (oldMoney - newMoney) <= 2000;
     }
 
     match /games/{gameId} {
+      allow read: if isAuthenticated();
 
-      // أي لاعب مسجل دخول يقدر يقرأ حالة اللعبة (لعرضها للجميع لحظيًا)
-      allow read: if isSignedIn();
+      allow create: if isAuthenticated()
+        && request.resource.data.keys().hasOnly(['status', 'currentPlayerId', 'turnNumber'])
+        && request.resource.data.status == 'lobby'
+        && request.resource.data.currentPlayerId == request.auth.uid
+        && request.resource.data.turnNumber == 0;
 
-      // إنشاء غرفة جديدة: أي مستخدم مسجل دخول يقدر ينشئ لعبة
-      allow create: if isSignedIn();
-
-      // تحديث حالة اللعبة العامة (دور مين اللاعب، رقم الجولة):
-      // فقط اللاعب الحالي (currentPlayerId) يقدر يغيّر الدور،
-      // ولازم القيم تكون بالشكل الصحيح (منع بيانات غريبة)
-      allow update: if isSignedIn()
+      allow update: if isAuthenticated()
         && request.auth.uid == resource.data.currentPlayerId
+        && request.resource.data.keys().hasOnly(['status', 'currentPlayerId', 'turnNumber'])
+        && isValidStatus(request.resource.data.status)
+        && isValidStatusTransition(resource.data.status, request.resource.data.status)
+        && request.resource.data.currentPlayerId is string
         && request.resource.data.turnNumber is int
-        && request.resource.data.currentPlayerId is string;
+        && (request.resource.data.turnNumber == resource.data.turnNumber
+            || request.resource.data.turnNumber == resource.data.turnNumber + 1);
 
-      allow delete: if false; // ما حدا يحذف لعبة (لتجنب الغش/التخريب)
+      allow delete: if false;
 
       match /players/{playerId} {
+        allow read: if isAuthenticated();
 
-        allow read: if isSignedIn();
-
-        // لاعب يقدر ينشئ مستنده الخاص فقط (uid يطابق playerId)، بشرط شكل بيانات صحيح
         allow create: if isOwner(playerId)
-          && request.resource.data.money is int
-          && request.resource.data.position is int
-          && request.resource.data.position >= 0
-          && request.resource.data.position < 40
-          && request.resource.data.nickname is string
-          && request.resource.data.nickname.size() >= 2
-          && request.resource.data.nickname.size() <= 20;
+          && hasOnlyAllowedPlayerFields(request.resource.data)
+          && isValidNickname(request.resource.data.nickname)
+          && request.resource.data.tokenColor is string
+          && request.resource.data.money == 1200
+          && request.resource.data.position == 0
+          && isValidOwnedTiles(request.resource.data.ownedTileIds)
+          && request.resource.data.ownedTileIds.size() == 0
+          && request.resource.data.isInJail == false
+          && request.resource.data.isBankrupt == false;
 
-        // لاعب يقدر يعدّل مستنده فقط — يمنع لاعب من تعديل رصيد/موقع لاعب ثاني
-        allow update: if isOwner(playerId)
-          && request.resource.data.money is int
-          && request.resource.data.position is int
-          && request.resource.data.position >= 0
-          && request.resource.data.position < 40;
+        allow update: if isAuthenticated()
+          && hasOnlyAllowedPlayerFields(request.resource.data)
+          && request.resource.data.joinedAt == resource.data.joinedAt
+          && isValidPosition(request.resource.data.position)
+          && isValidMoneyState(request.resource.data.money, request.resource.data.isBankrupt)
+          && isValidOwnedTiles(request.resource.data.ownedTileIds)
+          && request.resource.data.isInJail is bool
+          && isMoneyDeltaBounded(resource.data.money, request.resource.data.money)
+          && (
+               (isOwner(playerId) && isProfileOnlyUpdate())
+               ||
+               (isCurrentPlayer(gameId) && isGameplayUpdate())
+             );
 
         allow delete: if false;
       }
 
-      match /log/{logId} {
-        allow read: if isSignedIn();
-        // أي لاعب بالغرفة يقدر يضيف سجل حدث (لعرضه لحظيًا للجميع)
-        allow create: if isSignedIn();
-        allow update, delete: if false; // السجل غير قابل للتعديل بعد الكتابة
+      match /properties/{propertyId} {
+        allow read: if isAuthenticated();
+
+        allow write: if isCurrentPlayer(gameId)
+          && request.resource.data.keys().hasOnly(['ownerId', 'level', 'buildingType'])
+          && (request.resource.data.ownerId == null || request.resource.data.ownerId is string)
+          && request.resource.data.level is int
+          && request.resource.data.level >= 0 && request.resource.data.level <= 5
+          && request.resource.data.buildingType in ['none', 'rest-house', 'garage', 'hotel'];
+      }
+
+      match /events/{eventId} {
+        allow read: if isAuthenticated();
+
+        allow create: if isAuthenticated()
+          && request.resource.data.keys().hasOnly(['type', 'playerId', 'payload', 'timestamp'])
+          && request.resource.data.type is string
+          && request.resource.data.playerId == request.auth.uid
+          && request.resource.data.payload is map;
+
+        allow update: if false;
+        allow delete: if false;
       }
     }
   }

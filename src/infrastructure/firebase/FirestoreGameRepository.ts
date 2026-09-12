@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   increment,
+  limitToLast,
   onSnapshot,
   orderBy,
   query,
@@ -13,9 +14,10 @@ import {
 } from 'firebase/firestore';
 import { firestore } from './firebaseConfig';
 import { playerToDocument, playerToStateUpdate, documentToPlayer, type PlayerDocument } from './playerMapper';
+import { logEntryToDocument, documentToLogEntry, type EventLogDocument } from './eventLogMapper';
 import { generateRoomCode } from '../../shared/utils/roomCode';
 import type { Player } from '../../domain/entities/Player';
-import type { GameSnapshot, IGameRepository } from '../../domain/interfaces/IGameRepository';
+import type { GameSnapshot, GameLogEntry, IGameRepository } from '../../domain/interfaces/IGameRepository';
 
 interface GameDocument {
   readonly status: 'lobby' | 'in-progress' | 'finished';
@@ -24,6 +26,7 @@ interface GameDocument {
 }
 
 const MAX_ROOM_CODE_ATTEMPTS = 5;
+const LOG_WINDOW_SIZE = 40;
 
 function gameDocRef(gameId: string) {
   return doc(firestore, 'games', gameId);
@@ -31,6 +34,15 @@ function gameDocRef(gameId: string) {
 
 function playersCollectionRef(gameId: string) {
   return collection(firestore, 'games', gameId, 'players');
+}
+
+/**
+ * السجل مخزَّن فعلياً بمجموعة Firestore اسمها "events" (وليس "log") — هذا هو
+ * الاسم الموجود أصلاً بقواعد الأمان منذ Phase 3. استخدمناها كما هي بدل إنشاء
+ * مجموعة جديدة موازية، انظر ملاحظة الفجوة بالملخص المرفق مع هذا التسليم.
+ */
+function eventsCollectionRef(gameId: string) {
+  return collection(firestore, 'games', gameId, 'events');
 }
 
 /**
@@ -136,6 +148,29 @@ export class FirestoreGameRepository implements IGameRepository {
     await updateDoc(gameDocRef(gameId), {
       currentPlayerId: nextPlayerId,
       turnNumber: increment(1),
+    });
+  }
+
+  async logEvent(gameId: string, entry: GameLogEntry): Promise<void> {
+    const logDoc = logEntryToDocument(entry, serverTimestamp());
+    const newDocRef = doc(eventsCollectionRef(gameId));
+    await setDoc(newDocRef, logDoc);
+  }
+
+  /**
+   * limitToLast + orderBy('timestamp','asc') بدل orderBy('desc').limit() —
+   * كلاهما يرجع نفس أحدث N سجل، لكن limitToLast يحافظ على ترتيب الوقت
+   * التصاعدي بالنتيجة مباشرة (الأقدم أولاً، الأحدث أخيراً) وهو الترتيب اللي
+   * يحتاجه EventLog للعرض، بدل قلب المصفوفة يدوياً بعد كل تحديث.
+   */
+  subscribeToLog(gameId: string, onUpdate: (entries: readonly GameLogEntry[]) => void): () => void {
+    const logQuery = query(eventsCollectionRef(gameId), orderBy('timestamp', 'asc'), limitToLast(LOG_WINDOW_SIZE));
+
+    return onSnapshot(logQuery, (snapshot) => {
+      const entries = snapshot.docs
+        .map((docSnap) => documentToLogEntry(docSnap.data() as EventLogDocument))
+        .filter((entry): entry is GameLogEntry => entry !== null);
+      onUpdate(entries);
     });
   }
 }
