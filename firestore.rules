@@ -54,8 +54,12 @@ service cloud.firestore {
 
     function hasOnlyAllowedPlayerFields(data) {
       return data.keys().hasOnly(
-        ['nickname', 'tokenColor', 'money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels', 'joinedAt']
+        ['nickname', 'tokenColor', 'money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels', 'jailTurnsElapsed', 'joinedAt']
       );
+    }
+
+    function isValidJailTurnsElapsed(turns) {
+      return turns is int && turns >= 0 && turns <= 10;
     }
 
     function changedKeys() {
@@ -67,7 +71,7 @@ service cloud.firestore {
     }
 
     function isGameplayUpdate() {
-      return changedKeys().hasOnly(['money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels']);
+      return changedKeys().hasOnly(['money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels', 'jailTurnsElapsed']);
     }
 
     function isMoneyDeltaBounded(oldMoney, newMoney) {
@@ -107,7 +111,8 @@ service cloud.firestore {
           && isValidOwnedTiles(request.resource.data.ownedTileIds)
           && request.resource.data.ownedTileIds.size() == 0
           && request.resource.data.isInJail == false
-          && request.resource.data.isBankrupt == false;
+          && request.resource.data.isBankrupt == false
+          && request.resource.data.jailTurnsElapsed == 0;
 
         allow update: if isAuthenticated()
           && hasOnlyAllowedPlayerFields(request.resource.data)
@@ -116,6 +121,7 @@ service cloud.firestore {
           && isValidMoneyState(request.resource.data.money, request.resource.data.isBankrupt)
           && isValidOwnedTiles(request.resource.data.ownedTileIds)
           && request.resource.data.isInJail is bool
+          && isValidJailTurnsElapsed(request.resource.data.jailTurnsElapsed)
           && isMoneyDeltaBounded(resource.data.money, request.resource.data.money)
           && (
                (isOwner(playerId) && isProfileOnlyUpdate())
