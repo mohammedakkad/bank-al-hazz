@@ -55,6 +55,19 @@ export function Board({ players, ownershipByTileId, currentPlayerId, onTileSelec
 
   return (
     <div
+      /**
+       * dir="ltr" هنا مقصود ومهم: الصفحة كاملة dir="rtl" (index.html)، وCSS Grid يفسّر
+       * أرقام الأعمدة الصريحة (gridColumn: 1..11) بالنسبة لحافة "البداية المنطقية"،
+       * وهذه الحافة في RTL هي اليمين الفعلي وليس اليسار. بما إن TILE_GRID_POSITIONS
+       * (boardLayout.ts) يحسب col=1 على أساس إنه أقصى اليسار الفعلي (كما لو كانت
+       * الحاوية LTR)، فبدون هذا الـdir الصريح كانت اللوحة كلها تُعرض معكوسة أفقياً
+       * مقارنة بما يحسبه boardLayout.ts — وهذا بالضبط ما كان يُظهر رمز اللاعب الجديد
+       * عند "وقوف حر" (أعلى اليمين فعلياً) بدل "البداية" (أسفل اليمين فعلياً) لأي عين
+       * تراقب اللوحة بافتراض اتجاه القراءة العربي الطبيعي. عزل هذه الحاوية بـdir="ltr"
+       * يضمن إن عمود 1 = أقصى اليسار الفعلي دائماً، بغض النظر عن اتجاه الصفحة المحيطة —
+       * وهو نفس الحل المتّبع لأي شبكة/خريطة/رسم بياني داخل واجهة RTL.
+       */
+      dir="ltr"
       className="mx-auto grid aspect-square w-full max-w-3xl gap-0 bg-board-bg p-2 sm:p-4"
       style={{
         gridTemplateColumns: `repeat(${BOARD_GRID_SIZE}, 1fr)`,

@@ -18,11 +18,17 @@ import { logEntryToDocument, documentToLogEntry, type EventLogDocument } from '.
 import { generateRoomCode } from '../../shared/utils/roomCode';
 import type { Player } from '../../domain/entities/Player';
 import type { GameSnapshot, GameLogEntry, IGameRepository } from '../../domain/interfaces/IGameRepository';
+import type { AuctionState } from '../../domain/interfaces/AuctionState';
 
 interface GameDocument {
   readonly status: 'lobby' | 'in-progress' | 'finished';
   readonly currentPlayerId: string | null;
   readonly turnNumber: number;
+  /**
+   * إضافة Phase B — حقل إضافي بحت (additive)، غير موجود بمستندات الألعاب القديمة.
+   * لهذا نقرأه كـ`?? null` بكل مكان بدل الافتراض إنه موجود دائماً.
+   */
+  readonly activeAuction?: AuctionState | null;
 }
 
 const MAX_ROOM_CODE_ATTEMPTS = 5;
@@ -102,6 +108,7 @@ export class FirestoreGameRepository implements IGameRepository {
         currentPlayerId: latestGameDoc.currentPlayerId,
         turnNumber: latestGameDoc.turnNumber,
         players: latestPlayers,
+        activeAuction: latestGameDoc.activeAuction ?? null,
       });
     };
 
@@ -163,6 +170,29 @@ export class FirestoreGameRepository implements IGameRepository {
    * التصاعدي بالنتيجة مباشرة (الأقدم أولاً، الأحدث أخيراً) وهو الترتيب اللي
    * يحتاجه EventLog للعرض، بدل قلب المصفوفة يدوياً بعد كل تحديث.
    */
+  /**
+   * الأربعة التالية كلها writes بسيطة على حقل activeAuction بمستند games/{gameId} —
+   * نفس المستند اللي كل اللاعبين مشتركين فيه أصلاً عبر subscribeToGame، فلا حاجة
+   * لأي اشتراك/مجموعة فرعية جديدة. قواعد الأمان (firestore.rules) هي من تتحقق فعلياً
+   * إن كل كتابة صادرة من لاعب مؤهّل وبمبلغ صالح — هذه الطبقة تكتب الحالة كما وصلتها
+   * من طبقة application (AuctionUseCase) بدون أي تحقق إضافي هنا.
+   */
+  async startAuction(gameId: string, auction: AuctionState): Promise<void> {
+    await updateDoc(gameDocRef(gameId), { activeAuction: auction });
+  }
+
+  async placeAuctionBid(gameId: string, auction: AuctionState): Promise<void> {
+    await updateDoc(gameDocRef(gameId), { activeAuction: auction });
+  }
+
+  async passAuctionBid(gameId: string, auction: AuctionState): Promise<void> {
+    await updateDoc(gameDocRef(gameId), { activeAuction: auction });
+  }
+
+  async endAuction(gameId: string): Promise<void> {
+    await updateDoc(gameDocRef(gameId), { activeAuction: null });
+  }
+
   subscribeToLog(gameId: string, onUpdate: (entries: readonly GameLogEntry[]) => void): () => void {
     const logQuery = query(eventsCollectionRef(gameId), orderBy('timestamp', 'asc'), limitToLast(LOG_WINDOW_SIZE));
 

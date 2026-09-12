@@ -8,7 +8,27 @@ export interface EventLogDocument {
   readonly timestamp: FieldValue | number;
 }
 
+/**
+ * كل أنواع GameLogEntry الأخرى لها playerId (فاعل الحدث)، عدا 'property-auctioned'
+ * وهو حدث نظامي (نتيجة مزاد) بدون فاعل واحد بالضرورة — قد يحسمه أي عميل متصل.
+ * playerId بمستند Firestore هنا فارغ '' عمداً بدل قيمة عشوائية، وقاعدة الأمان
+ * (firestore.rules) تسمح صراحة بهذه الحالة الخاصة فقط بدل تعميم الشرط.
+ */
 export function logEntryToDocument(entry: GameLogEntry, timestamp: FieldValue): EventLogDocument {
+  if (entry.type === 'property-auctioned') {
+    return {
+      type: entry.type,
+      playerId: '',
+      payload: {
+        tileId: entry.tileId,
+        tileName: entry.tileName,
+        winnerId: entry.winnerId ?? '',
+        winnerNickname: entry.winnerNickname ?? '',
+        amount: entry.amount,
+      },
+      timestamp,
+    };
+  }
   const { type, playerId, ...rest } = entry;
   return { type, playerId, payload: rest, timestamp };
 }
@@ -37,6 +57,16 @@ export function documentToLogEntry(doc: EventLogDocument): GameLogEntry | null {
     case 'property-built':
       if (typeof p['playerNickname'] !== 'string' || typeof p['tileId'] !== 'number' || typeof p['tileName'] !== 'string' || typeof p['newLevel'] !== 'number') return null;
       return { type: 'property-built', playerId: doc.playerId, playerNickname: p['playerNickname'], tileId: p['tileId'], tileName: p['tileName'], newLevel: p['newLevel'] };
+    case 'property-auctioned':
+      if (typeof p['tileId'] !== 'number' || typeof p['tileName'] !== 'string' || typeof p['winnerId'] !== 'string' || typeof p['winnerNickname'] !== 'string' || typeof p['amount'] !== 'number') return null;
+      return {
+        type: 'property-auctioned',
+        tileId: p['tileId'],
+        tileName: p['tileName'],
+        winnerId: p['winnerId'] === '' ? null : p['winnerId'],
+        winnerNickname: p['winnerNickname'] === '' ? null : p['winnerNickname'],
+        amount: p['amount'],
+      };
     default:
       return null;
   }

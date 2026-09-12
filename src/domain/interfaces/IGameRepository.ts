@@ -1,4 +1,5 @@
 import type { Player } from '../entities/Player';
+import type { AuctionState } from './AuctionState';
 
 export interface GameSnapshot {
   readonly gameId: string;
@@ -6,6 +7,8 @@ export interface GameSnapshot {
   readonly currentPlayerId: string | null;
   readonly turnNumber: number;
   readonly players: readonly Player[];
+  /** إضافة Phase B — مزاد جارٍ حالياً (null لو ما في مزاد مفتوح) */
+  readonly activeAuction: AuctionState | null;
 }
 
 /**
@@ -18,7 +21,9 @@ export type GameLogEntry =
   | { readonly type: 'player-moved'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string }
   | { readonly type: 'property-bought'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly price: number }
   | { readonly type: 'rent-paid'; readonly playerId: string; readonly playerNickname: string; readonly ownerId: string; readonly ownerNickname: string; readonly tileId: number; readonly tileName: string; readonly amount: number }
-  | { readonly type: 'property-built'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly newLevel: number };
+  | { readonly type: 'property-built'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly newLevel: number }
+  /** إضافة Phase B — نتيجة مزاد منتهٍ. winnerId/winnerNickname تكون null لو ما حدا زايد */
+  | { readonly type: 'property-auctioned'; readonly tileId: number; readonly tileName: string; readonly winnerId: string | null; readonly winnerNickname: string | null; readonly amount: number };
 
 /**
  * Port (واجهة) وليس implementation.
@@ -38,6 +43,17 @@ export interface IGameRepository {
 
   /** إضافة Phase 4 — إثبات حدث بسجل اللعبة (append-only) */
   logEvent(gameId: string, entry: GameLogEntry): Promise<void>;
+
+  /**
+   * إضافات Phase B — دورة حياة المزاد. الأربعة إضافية بحتة على الواجهة (additive)،
+   * ولا تغيّر أي توقيع موجود، بنفس نهج إضافة startGame سابقاً. activeAuction يُقرأ
+   * ضمن subscribeToGame العادي (نفس مستند games/{gameId})، فلا حاجة لاشتراك منفصل.
+   */
+  startAuction(gameId: string, auction: AuctionState): Promise<void>;
+  placeAuctionBid(gameId: string, auction: AuctionState): Promise<void>;
+  passAuctionBid(gameId: string, auction: AuctionState): Promise<void>;
+  /** ينهي المزاد ويمسح activeAuction — يُستدعى بعد تحديث حالة الفائز (أو بدون تحديث لو ما حدا زايد) */
+  endAuction(gameId: string): Promise<void>;
   /**
    * اشتراك مستقل عن subscribeToGame عمداً: سجل الأحداث له استعلام مختلف تماماً
    * (ترتيب بالوقت + حد أقصى لعدد النتائج)، ودمجه بـGameSnapshot كان يُحمّل شكلاً

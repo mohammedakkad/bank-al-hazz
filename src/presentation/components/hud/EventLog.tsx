@@ -9,9 +9,11 @@ export interface EventLogProps {
 
 const COLLAPSED_VISIBLE_COUNT = 2;
 
-/** مفتاح ثابت لكل سطر — الاتحاد المميَّز ما فيه id، فنبني واحداً من محتوى الحدث نفسه */
+/** مفتاح ثابت لكل سطر — الاتحاد المميَّز ما فيه id، فنبني واحداً من محتوى الحدث نفسه.
+ * 'property-auctioned' وحده بدون playerId (حدث نظامي بدون فاعل واحد بالضرورة). */
 function entryKey(entry: GameLogEntry, index: number): string {
-  return `${index}-${entry.type}-${entry.playerId}`;
+  const discriminant = entry.type === 'property-auctioned' ? `tile-${entry.tileId}` : entry.playerId;
+  return `${index}-${entry.type}-${discriminant}`;
 }
 
 export function EventLog({ entries }: EventLogProps) {

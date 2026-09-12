@@ -12,5 +12,9 @@ export function formatLogEntry(entry: GameLogEntry): string {
       return `${entry.playerNickname} دفع ${entry.amount} جنيه إيجار لـ${entry.ownerNickname} على ${entry.tileName}`;
     case 'property-built':
       return `${entry.playerNickname} بنى على ${entry.tileName} (مستوى ${entry.newLevel})`;
+    case 'property-auctioned':
+      return entry.winnerId
+        ? `${entry.winnerNickname} فاز بمزاد ${entry.tileName} مقابل ${entry.amount} جنيه`
+        : `انتهى مزاد ${entry.tileName} بدون فائز — بقي العقار بدون مالك`;
   }
 }

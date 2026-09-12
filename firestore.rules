@@ -87,15 +87,67 @@ service cloud.firestore {
         && request.resource.data.currentPlayerId == request.auth.uid
         && request.resource.data.turnNumber == 0;
 
+      // --- Phase B: مزاد العقارات (activeAuction) ---
+      // حقل إضافي بحت على مستند اللعبة نفسه. مسموح لأي لاعب "مؤهّل" بالمزاد يكتبه —
+      // وليس فقط currentPlayerId — لأن قاعدة المزاد الرسمية تسمح لأي لاعب بالمزايدة،
+      // بما فيهم من رفض الشراء أصلاً؛ لذلك هذا الفرع منفصل تماماً عن فرع تحديث
+      // status/currentPlayerId/turnNumber أعلاه (الذي يبقى بصلاحية صاحب الدور فقط).
+      function isValidBidAmount(amount) {
+        return amount is int && amount >= 0 && amount <= 50000;
+      }
+
+      function isValidPlayerIdList(list) {
+        return list is list && list.size() <= 6;
+      }
+
+      function isValidAuctionShape(auction) {
+        return auction.keys().hasOnly(
+          ['tileId', 'eligiblePlayerIds', 'passedPlayerIds', 'currentHighestBid', 'currentHighestBidderId', 'turnPlayerId']
+        )
+        && auction.tileId is int && auction.tileId >= 0 && auction.tileId <= 39
+        && isValidPlayerIdList(auction.eligiblePlayerIds)
+        && isValidPlayerIdList(auction.passedPlayerIds)
+        && isValidBidAmount(auction.currentHighestBid)
+        && (auction.currentHighestBidderId == null || auction.currentHighestBidderId is string)
+        && auction.turnPlayerId is string
+        && auction.turnPlayerId in auction.eligiblePlayerIds;
+      }
+
+      /**
+       * الكاتب لازم يكون: (أ) بدأ المزاد بنفسه وهو صاحب الدور وقتها (بدء المزاد)،
+       * أو (ب) أحد اللاعبين المؤهّلين بالمزاد الحالي أصلاً (مزايدة/تمرير) —
+       * سواء كان بالمزاد المُخزَّن حالياً (resource) أو بالمزاد الجديد المرسَل.
+       */
+      function isEligibleAuctionWriter(auction) {
+        return isAuthenticated()
+          && (
+            (resource.data.activeAuction == null && request.auth.uid in auction.eligiblePlayerIds)
+            || (resource.data.activeAuction != null && request.auth.uid in resource.data.activeAuction.eligiblePlayerIds)
+          );
+      }
+
       allow update: if isAuthenticated()
-        && request.auth.uid == resource.data.currentPlayerId
-        && request.resource.data.keys().hasOnly(['status', 'currentPlayerId', 'turnNumber'])
-        && isValidStatus(request.resource.data.status)
-        && isValidStatusTransition(resource.data.status, request.resource.data.status)
-        && request.resource.data.currentPlayerId is string
-        && request.resource.data.turnNumber is int
-        && (request.resource.data.turnNumber == resource.data.turnNumber
-            || request.resource.data.turnNumber == resource.data.turnNumber + 1);
+        && (
+             (
+               request.auth.uid == resource.data.currentPlayerId
+               && request.resource.data.keys().hasOnly(['status', 'currentPlayerId', 'turnNumber'])
+               && isValidStatus(request.resource.data.status)
+               && isValidStatusTransition(resource.data.status, request.resource.data.status)
+               && request.resource.data.currentPlayerId is string
+               && request.resource.data.turnNumber is int
+               && (request.resource.data.turnNumber == resource.data.turnNumber
+                   || request.resource.data.turnNumber == resource.data.turnNumber + 1)
+             )
+             ||
+             (
+               changedKeys().hasOnly(['activeAuction'])
+               && (
+                    request.resource.data.activeAuction == null
+                    || (isValidAuctionShape(request.resource.data.activeAuction)
+                        && isEligibleAuctionWriter(request.resource.data.activeAuction))
+                  )
+             )
+           );
 
       allow delete: if false;
 
@@ -149,7 +201,12 @@ service cloud.firestore {
         allow create: if isAuthenticated()
           && request.resource.data.keys().hasOnly(['type', 'playerId', 'payload', 'timestamp'])
           && request.resource.data.type is string
-          && request.resource.data.playerId == request.auth.uid
+          && (
+               request.resource.data.playerId == request.auth.uid
+               // 'property-auctioned' حدث نظامي بدون فاعل واحد بالضرورة (أي عميل مؤهّل
+               // قد يحسم المزاد) — playerId فارغ عمداً بهذه الحالة فقط، وليس تعميماً.
+               || (request.resource.data.type == 'property-auctioned' && request.resource.data.playerId == '')
+             )
           && request.resource.data.payload is map;
 
         allow update: if false;

@@ -29,4 +29,18 @@ describe('formatLogEntry', () => {
     const entry: GameLogEntry = { type: 'property-built', playerId: 'p1', playerNickname: 'أحمد', tileId: 6, tileName: 'القدس', newLevel: 2 };
     expect(formatLogEntry(entry)).toBe('أحمد بنى على القدس (مستوى 2)');
   });
+
+  it('property-auctioned (يوجد فائز)', () => {
+    const entry: GameLogEntry = {
+      type: 'property-auctioned', tileId: 6, tileName: 'القدس', winnerId: 'p2', winnerNickname: 'سارة', amount: 120,
+    };
+    expect(formatLogEntry(entry)).toBe('سارة فاز بمزاد القدس مقابل 120 جنيه');
+  });
+
+  it('property-auctioned (بدون فائز)', () => {
+    const entry: GameLogEntry = {
+      type: 'property-auctioned', tileId: 6, tileName: 'القدس', winnerId: null, winnerNickname: null, amount: 0,
+    };
+    expect(formatLogEntry(entry)).toBe('انتهى مزاد القدس بدون فائز — بقي العقار بدون مالك');
+  });
 });

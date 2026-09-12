@@ -5,9 +5,11 @@ import { Board, type PropertyOwnership } from '../components/board/Board';
 import { PlayerHud } from '../components/hud/PlayerHud';
 import { EventLog } from '../components/hud/EventLog';
 import { BuyPropertyModal } from '../components/modals/BuyPropertyModal';
+import { AuctionModal } from '../components/modals/AuctionModal';
 import { BOARD_TILES, type PropertyTile } from '../../domain/entities/BoardTile';
 import { Money } from '../../domain/valueObjects/Money';
 import type { Player } from '../../domain/entities/Player';
+import type { AuctionState } from '../../domain/interfaces/AuctionState';
 import type { DiceResult } from '../../domain/gameRules/DiceRoller';
 import { rollDice } from '../../domain/gameRules/DiceRoller';
 import { calculateMove, START_BONUS } from '../../domain/gameRules/MovementRules';
@@ -15,6 +17,15 @@ import { isTripleDoubles, JAIL_FINE } from '../../domain/gameRules/JailRules';
 import type { GameSnapshot, GameLogEntry } from '../../domain/interfaces/IGameRepository';
 import { playJailTurn } from '../../application/useCases/JailTurnUseCase';
 import { buyProperty, type BuyPropertyFailureReason } from '../../application/useCases/BuyPropertyUseCase';
+import {
+  startAuction,
+  placeBid,
+  passBid,
+  isAuctionOver,
+  resolveAuction,
+  type BidFailureReason,
+  type PassFailureReason,
+} from '../../application/useCases/AuctionUseCase';
 import { payRent } from '../../application/useCases/PayRentUseCase';
 import { buildOnProperty, type BuildFailureReason } from '../../application/useCases/BuildOnPropertyUseCase';
 import { getNextPlayerId } from '../../domain/gameRules/TurnOrder';
@@ -24,6 +35,19 @@ const BUY_FAILURE_MESSAGES: Record<BuyPropertyFailureReason, string> = {
   'not-a-property': 'هذا المربع غير قابل للتملك',
   'already-owned': 'العقار مملوك لغيرك',
   'insufficient-funds': 'رصيدك لا يكفي لشراء هذا العقار',
+};
+
+const AUCTION_BID_FAILURE_MESSAGES: Record<BidFailureReason, string> = {
+  'not-your-turn': 'ليس دورك بالمزايدة الآن',
+  'already-passed': 'لقد انسحبت من هذا المزاد',
+  'bid-too-low': 'لازم تزيد المزايدة عن أعلى مزايدة حالية',
+  'insufficient-funds': 'رصيدك لا يكفي لهذه المزايدة',
+  'unknown-bidder': 'حدث خطأ غير متوقع بالمزاد',
+};
+
+const AUCTION_PASS_FAILURE_MESSAGES: Record<PassFailureReason, string> = {
+  'not-your-turn': 'ليس دورك الآن',
+  'already-passed': 'لقد انسحبت من هذا المزاد بالفعل',
 };
 
 const BUILD_FAILURE_MESSAGES: Record<BuildFailureReason, string> = {
@@ -54,6 +78,7 @@ export function GameScreen() {
   const [logEntries, setLogEntries] = useState<readonly GameLogEntry[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [pendingBuy, setPendingBuy] = useState<PendingBuy | null>(null);
+  const [auctionPending, setAuctionPending] = useState<{ readonly consecutiveDoubles: number; readonly actingPlayerId: string } | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isRolling, setIsRolling] = useState(false);
   const [lastDiceResult, setLastDiceResult] = useState<DiceResult | null>(null);
@@ -76,6 +101,30 @@ export function GameScreen() {
       navigate(`/lobby/${roomId}`, { replace: true });
     }
   }, [snapshot, roomId, navigate]);
+
+  /**
+   * يكمل تدفق الدور بعد انتهاء مزاد بدأه هذا العميل تحديداً (auctionPending مخزَّن
+   * محلياً فقط لدى عميل اللاعب صاحب الدور الأصلي — بقية العملاء auctionPending عندهم
+   * يضل null دائماً، فهذا الـeffect ما بيعمل إشي عندهم). لما activeAuction يرجع null
+   * (سواء حسمه هذا العميل نفسه أو عميل آخر بمزايدة/تمرير أنهت المزاد)، نكمل نفس
+   * منطق ما بعد قرار الشراء تماماً: دور إضافي لو doubles، وإلا إنهاء الدور.
+   */
+  useEffect(() => {
+    if (!auctionPending || snapshot?.activeAuction) return;
+    const { consecutiveDoubles, actingPlayerId } = auctionPending;
+    setAuctionPending(null);
+    const actingPlayer = snapshot?.players.find((player) => player.id === actingPlayerId);
+    if (!actingPlayer) {
+      setIsBusy(false);
+      return;
+    }
+    if (consecutiveDoubles > 0) {
+      void performRoll(actingPlayer, consecutiveDoubles);
+    } else {
+      void endTurn(actingPlayerId).then(() => setIsBusy(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot?.activeAuction, auctionPending]);
 
 
   const me = useMemo(
@@ -328,15 +377,68 @@ export function GameScreen() {
   }
 
   async function handleBuySkip() {
-    if (!pendingBuy) return;
-    const { movedPlayer, consecutiveDoubles } = pendingBuy;
+    if (!pendingBuy || !roomId || !snapshot) return;
+    const { movedPlayer, consecutiveDoubles, tileId } = pendingBuy;
     setPendingBuy(null);
 
-    if (consecutiveDoubles > 0) {
-      await performRoll(movedPlayer, consecutiveDoubles);
+    const auction = startAuction(tileId, snapshot.players, movedPlayer.id);
+    setAuctionPending({ consecutiveDoubles, actingPlayerId: movedPlayer.id });
+    await gameRepository.startAuction(roomId, auction);
+    // isBusy يضل true — الـeffect فوق (auctionPending) هو من يكمل الدور لما المزاد ينتهي.
+  }
+
+  /**
+   * يحسم مزاداً وصل لنهايته فعلياً: ينقل العقار والمال للفائز (لو وُجد)، يسجّل
+   * الحدث بالسجل، ثم يمسح activeAuction. يُستدعى من نفس العميل اللي مزايدته أو
+   * تمريره أنهى المزاد تحديداً (لا سباق بين عدة عملاء لأن الاستدعاء متزامن مع
+   * فعل ذلك العميل نفسه، وليس عبر مراقبة تغييرات لاحقة).
+   */
+  async function finishAuction(finalAuction: AuctionState) {
+    if (!roomId || !snapshot) return;
+    const tile = BOARD_TILES.find((candidate) => candidate.id === finalAuction.tileId);
+    const resolution = resolveAuction(finalAuction, snapshot.players);
+
+    if (resolution.sold) {
+      await gameRepository.updatePlayerState(roomId, resolution.winner);
+    }
+
+    await gameRepository.logEvent(roomId, {
+      type: 'property-auctioned',
+      tileId: finalAuction.tileId,
+      tileName: tile?.name ?? '',
+      winnerId: resolution.sold ? resolution.winner.id : null,
+      winnerNickname: resolution.sold ? resolution.winner.nickname : null,
+      amount: resolution.sold ? resolution.amount : 0,
+    });
+
+    await gameRepository.endAuction(roomId);
+  }
+
+  async function handleAuctionBid(amount: number) {
+    if (!roomId || !snapshot?.activeAuction || !me) return;
+    const result = placeBid(snapshot.activeAuction, snapshot.players, me.id, amount);
+    if (!result.success) {
+      setMessage(AUCTION_BID_FAILURE_MESSAGES[result.reason]);
+      return;
+    }
+    if (isAuctionOver(result.auction)) {
+      await finishAuction(result.auction);
     } else {
-      await endTurn(movedPlayer.id);
-      setIsBusy(false);
+      await gameRepository.placeAuctionBid(roomId, result.auction);
+    }
+  }
+
+  async function handleAuctionPass() {
+    if (!roomId || !snapshot?.activeAuction || !me) return;
+    const result = passBid(snapshot.activeAuction, me.id);
+    if (!result.success) {
+      setMessage(AUCTION_PASS_FAILURE_MESSAGES[result.reason]);
+      return;
+    }
+    if (isAuctionOver(result.auction)) {
+      await finishAuction(result.auction);
+    } else {
+      await gameRepository.passAuctionBid(roomId, result.auction);
     }
   }
 
@@ -376,6 +478,10 @@ export function GameScreen() {
   const pendingBuyTile = pendingBuy
     ? (BOARD_TILES.find((tile): tile is PropertyTile => tile.type === 'property' && tile.id === pendingBuy.tileId) ?? null)
     : null;
+  const auctionTile = snapshot.activeAuction
+    ? (BOARD_TILES.find((tile): tile is PropertyTile => tile.type === 'property' && tile.id === snapshot.activeAuction?.tileId) ?? null)
+    : null;
+  const nicknameById = new Map(snapshot.players.map((player) => [player.id, player.nickname]));
 
   return (
     <main className="flex min-h-screen flex-col gap-3 bg-board-bg p-3 pb-0 text-white sm:p-6 sm:pb-0">
@@ -431,6 +537,16 @@ export function GameScreen() {
         onSkip={handleBuySkip}
       />
 
+      <AuctionModal
+        auction={snapshot.activeAuction}
+        tile={auctionTile}
+        myPlayerId={me.id}
+        nicknameById={nicknameById}
+        myMoney={me.money.value}
+        onBid={handleAuctionBid}
+        onPass={handleAuctionPass}
+      />
+
       <PlayerHud
         myMoney={me.money.value}
         isMyTurn={isMyTurn}
@@ -439,7 +555,7 @@ export function GameScreen() {
         isRolling={isRolling}
         lastDiceResult={lastDiceResult}
         onRollDice={handleRollDice}
-        disabled={isBusy || pendingBuy !== null}
+        disabled={isBusy || pendingBuy !== null || snapshot.activeAuction !== null}
       />
     </main>
   );
