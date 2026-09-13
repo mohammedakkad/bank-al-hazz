@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { PropertyTile } from '../../../domain/entities/BoardTile';
 
@@ -11,12 +11,38 @@ export interface BuyPropertyModalProps {
 
 export function BuyPropertyModal({ tile, currentMoney, onBuy, onSkip }: BuyPropertyModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  /**
+   * Bug 3 (الإصلاح الفعلي): السبب الحقيقي للتعليق على "جاري الشراء" كان افتراض
+   * خاطئ إن هذا المكوّن "ينتهي دوره ويختفي تلقائياً" بعد كل عملية شراء — غير
+   * صحيح منذ إضافة استمرار الدور بـdoubles (Phase B): React يعيد استخدام نفس
+   * نسخة المكوّن لقرار شراء تالٍ (عقار ثانٍ بنفس الدور)، فتبقى isSubmitting=true
+   * من القرار السابق للأبد. نصفّرها صراحة كل مرة يتغيّر فيها العقار المعروض
+   * (بما في ذلك اختفاؤه بـtile=null) بدل الاعتماد على "اختفاء المكوّن".
+   */
+  useEffect(() => {
+    setIsSubmitting(false);
+    setErrorMessage(null);
+  }, [tile?.id]);
 
   async function handleBuyClick() {
     setIsSubmitting(true);
-    await onBuy();
-    // لا حاجة لإعادة isSubmitting لـfalse يدوياً: المكوّن سيُزال بالكامل (tile يصير null)
-    // فور نجاح onBuy لأن الشراء ينهي الدور، فيختفي الـmodal تلقائياً بخروج AnimatePresence.
+    setErrorMessage(null);
+    try {
+      await onBuy();
+      // نجاح عادي: GameScreen سيصفّر tile قريباً فيصفّر الـeffect فوق isSubmitting تلقائياً.
+    } catch (error) {
+      // العنصر الثاني بالإصلاح: أي خطأ (مثلاً كتابة Firestore فشلت) ما عاد يعلّق الزر للأبد
+      console.error('BuyPropertyModal: onBuy failed', error);
+      setIsSubmitting(false);
+      setErrorMessage('تعذّر إتمام الشراء، حاول مرة أخرى أو اضغط تخطي');
+    }
+  }
+
+  function handleSkipClick() {
+    setErrorMessage(null);
+    onSkip();
   }
 
   return (
@@ -64,13 +90,19 @@ export function BuyPropertyModal({ tile, currentMoney, onBuy, onSkip }: BuyPrope
               </button>
               <button
                 type="button"
-                onClick={onSkip}
+                onClick={handleSkipClick}
                 disabled={isSubmitting}
                 className="flex-1 rounded-md border border-board-line px-3 py-2 text-sm disabled:opacity-40"
               >
                 تخطي
               </button>
             </div>
+
+            {errorMessage && (
+              <p role="alert" className="mt-2 text-center text-xs text-red-400">
+                {errorMessage}
+              </p>
+            )}
           </motion.div>
         </motion.div>
       )}

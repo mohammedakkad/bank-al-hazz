@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   increment,
   limitToLast,
   onSnapshot,
@@ -16,9 +17,11 @@ import { firestore } from './firebaseConfig';
 import { playerToDocument, playerToStateUpdate, documentToPlayer, type PlayerDocument } from './playerMapper';
 import { logEntryToDocument, documentToLogEntry, type EventLogDocument } from './eventLogMapper';
 import { generateRoomCode } from '../../shared/utils/roomCode';
+import { pickAvailableTokenColor } from '../../shared/utils/tokenColor';
 import type { Player } from '../../domain/entities/Player';
 import type { GameSnapshot, GameLogEntry, IGameRepository } from '../../domain/interfaces/IGameRepository';
 import type { AuctionState } from '../../domain/interfaces/AuctionState';
+import { createInitialDeckState, type DeckState } from '../../domain/gameRules/CardDeck';
 
 interface GameDocument {
   readonly status: 'lobby' | 'in-progress' | 'finished';
@@ -29,6 +32,8 @@ interface GameDocument {
    * لهذا نقرأه كـ`?? null` بكل مكان بدل الافتراض إنه موجود دائماً.
    */
   readonly activeAuction?: AuctionState | null;
+  /** إضافة Bug4/بطاقات — نفس ملاحظة activeAuction: قد لا توجد بمستندات قديمة، نقرأها بـ`?? createInitialDeckState()` */
+  readonly deckState?: DeckState;
 }
 
 const MAX_ROOM_CODE_ATTEMPTS = 5;
@@ -81,8 +86,24 @@ export class FirestoreGameRepository implements IGameRepository {
     return roomCode;
   }
 
+  /**
+   * Bug 1 (السبب الفعلي): لاعبان بنفس الغرفة ممكن ينتهي بيهم نفس لون الرمز الافتراضي
+   * (#E24B4A بالـEntryScreen) لو محدش منهم بدّله يدوياً. قبل الكتابة، نتحقق من ألوان
+   * اللاعبين الحاليين بهذه الغرفة تحديداً ونبدّل لون الطارئ الجديد تلقائياً لأقرب لون
+   * متاح غير مستخدَم لو كان فيه تصادم — بدل ما يوصل التصادم أصلاً لواجهة اللعب.
+   */
   async joinGame(gameId: string, player: Player): Promise<void> {
-    const playerDoc = playerToDocument(player, serverTimestamp());
+    const existingPlayersSnapshot = await getDocs(playersCollectionRef(gameId));
+    const takenColors = new Set(
+      existingPlayersSnapshot.docs
+        .filter((playerDoc) => playerDoc.id !== player.id)
+        .map((playerDoc) => (playerDoc.data() as PlayerDocument).tokenColor),
+    );
+    const resolvedPlayer = takenColors.has(player.tokenColor)
+      ? player.withTokenColor(pickAvailableTokenColor(takenColors))
+      : player;
+
+    const playerDoc = playerToDocument(resolvedPlayer, serverTimestamp());
     await setDoc(doc(playersCollectionRef(gameId), player.id), playerDoc);
   }
 
@@ -109,6 +130,7 @@ export class FirestoreGameRepository implements IGameRepository {
         turnNumber: latestGameDoc.turnNumber,
         players: latestPlayers,
         activeAuction: latestGameDoc.activeAuction ?? null,
+        deckState: latestGameDoc.deckState ?? createInitialDeckState(),
       });
     };
 
@@ -191,6 +213,10 @@ export class FirestoreGameRepository implements IGameRepository {
 
   async endAuction(gameId: string): Promise<void> {
     await updateDoc(gameDocRef(gameId), { activeAuction: null });
+  }
+
+  async updateDeckState(gameId: string, deckState: DeckState): Promise<void> {
+    await updateDoc(gameDocRef(gameId), { deckState });
   }
 
   subscribeToLog(gameId: string, onUpdate: (entries: readonly GameLogEntry[]) => void): () => void {

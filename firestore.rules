@@ -126,6 +126,24 @@ service cloud.firestore {
           );
       }
 
+      // --- Bug4/بطاقات: حالة رزمتي فرصة وصندوق المجتمع (deckState) ---
+      // نفس نمط activeAuction: حقل إضافي على مستند اللعبة. بخلاف المزاد، سحب/استخدام
+      // بطاقة يصير فقط أثناء دور اللاعب نفسه (سواء بالهبوط العادي أو استخدام بطاقة
+      // اخرج-من-السجن)، فالكاتب المسموح هنا هو صاحب الدور الحالي حصراً — نفس تقييد
+      // isCurrentPlayer(gameId) المستخدم أصلاً لتحديثات اللاعبين الاعتيادية (money/position).
+      function isValidDeckOrder(order) {
+        return order is list && order.size() <= 16;
+      }
+
+      function isValidDeckState(deck) {
+        return deck.keys().hasOnly(['chanceOrder', 'communityOrder', 'heldByPlayerId'])
+          && isValidDeckOrder(deck.chanceOrder)
+          && isValidDeckOrder(deck.communityOrder)
+          && deck.heldByPlayerId.keys().hasOnly(['chance', 'community'])
+          && (deck.heldByPlayerId.chance == null || deck.heldByPlayerId.chance is string)
+          && (deck.heldByPlayerId.community == null || deck.heldByPlayerId.community is string);
+      }
+
       allow update: if isAuthenticated()
         && (
              (
@@ -146,6 +164,12 @@ service cloud.firestore {
                     || (isValidAuctionShape(request.resource.data.activeAuction)
                         && isEligibleAuctionWriter(request.resource.data.activeAuction))
                   )
+             )
+             ||
+             (
+               changedKeys().hasOnly(['deckState'])
+               && isCurrentPlayer(gameId)
+               && isValidDeckState(request.resource.data.deckState)
              )
            );
 

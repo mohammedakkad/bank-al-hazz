@@ -21,10 +21,18 @@ export interface BoardProps {
 /**
  * يبني خريطة (tileId -> لاعبين واقفين عليه) مرة واحدة لكل تغيّر بقائمة اللاعبين،
  * بدل فلترة المصفوفة كاملة 40 مرة (مرة لكل مربع) عند كل render.
+ *
+ * دمج دفاعي بحسب player.id (Bug 5): حتى لو وصلت `players` بمدخلين لنفس المعرّف
+ * (خلل بمصدر البيانات لاحقاً، أو انضمام مزدوج)، هذا الحد يمنع ظهور رمزين لنفس
+ * اللاعب على اللوحة — نتيجة كل معرّف تُبنى من أول ظهور له فقط بالمصفوفة.
  */
 function groupPlayersByPosition(players: readonly Player[]): ReadonlyMap<number, readonly Player[]> {
+  const seenPlayerIds = new Set<string>();
   const grouped = new Map<number, Player[]>();
   for (const player of players) {
+    if (seenPlayerIds.has(player.id)) continue;
+    seenPlayerIds.add(player.id);
+
     const existing = grouped.get(player.position);
     if (existing) {
       existing.push(player);

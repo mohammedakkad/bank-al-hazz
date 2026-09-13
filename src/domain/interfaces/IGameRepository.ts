@@ -1,5 +1,6 @@
 import type { Player } from '../entities/Player';
 import type { AuctionState } from './AuctionState';
+import type { DeckState } from '../gameRules/CardDeck';
 
 export interface GameSnapshot {
   readonly gameId: string;
@@ -9,6 +10,8 @@ export interface GameSnapshot {
   readonly players: readonly Player[];
   /** إضافة Phase B — مزاد جارٍ حالياً (null لو ما في مزاد مفتوح) */
   readonly activeAuction: AuctionState | null;
+  /** إضافة Bug4/بطاقات — ترتيب رزمتي فرصة/صندوق المجتمع الحالي + حامل بطاقة اخرج-من-السجن إن وجد */
+  readonly deckState: DeckState;
 }
 
 /**
@@ -18,12 +21,14 @@ export interface GameSnapshot {
  */
 export type GameLogEntry =
   | { readonly type: 'dice-rolled'; readonly playerId: string; readonly playerNickname: string; readonly die1: number; readonly die2: number; readonly total: number }
-  | { readonly type: 'player-moved'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string }
+  | { readonly type: 'player-moved'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly collectedGoBonus?: boolean }
   | { readonly type: 'property-bought'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly price: number }
   | { readonly type: 'rent-paid'; readonly playerId: string; readonly playerNickname: string; readonly ownerId: string; readonly ownerNickname: string; readonly tileId: number; readonly tileName: string; readonly amount: number }
   | { readonly type: 'property-built'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly newLevel: number }
   /** إضافة Phase B — نتيجة مزاد منتهٍ. winnerId/winnerNickname تكون null لو ما حدا زايد */
-  | { readonly type: 'property-auctioned'; readonly tileId: number; readonly tileName: string; readonly winnerId: string | null; readonly winnerNickname: string | null; readonly amount: number };
+  | { readonly type: 'property-auctioned'; readonly tileId: number; readonly tileName: string; readonly winnerId: string | null; readonly winnerNickname: string | null; readonly amount: number }
+  /** إضافة Bug4/بطاقات — بطاقة فرصة/صندوق مجتمع تم سحبها وتطبيقها */
+  | { readonly type: 'card-drawn'; readonly playerId: string; readonly playerNickname: string; readonly deckType: 'chance' | 'community'; readonly cardText: string };
 
 /**
  * Port (واجهة) وليس implementation.
@@ -54,6 +59,12 @@ export interface IGameRepository {
   passAuctionBid(gameId: string, auction: AuctionState): Promise<void>;
   /** ينهي المزاد ويمسح activeAuction — يُستدعى بعد تحديث حالة الفائز (أو بدون تحديث لو ما حدا زايد) */
   endAuction(gameId: string): Promise<void>;
+
+  /**
+   * إضافة Bug4/بطاقات — يحفظ حالة الرزمتين بعد أي سحب أو استخدام بطاقة اخرج-من-السجن.
+   * additive بحتة (نفس نمط activeAuction) — تُقرأ ضمن subscribeToGame العادي.
+   */
+  updateDeckState(gameId: string, deckState: DeckState): Promise<void>;
   /**
    * اشتراك مستقل عن subscribeToGame عمداً: سجل الأحداث له استعلام مختلف تماماً
    * (ترتيب بالوقت + حد أقصى لعدد النتائج)، ودمجه بـGameSnapshot كان يُحمّل شكلاً

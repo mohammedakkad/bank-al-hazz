@@ -4,7 +4,7 @@ import type { GameLogEntry } from '../../domain/interfaces/IGameRepository';
 export interface EventLogDocument {
   readonly type: GameLogEntry['type'];
   readonly playerId: string;
-  readonly payload: Readonly<Record<string, string | number>>;
+  readonly payload: Readonly<Record<string, string | number | boolean>>;
   readonly timestamp: FieldValue | number;
 }
 
@@ -47,7 +47,14 @@ export function documentToLogEntry(doc: EventLogDocument): GameLogEntry | null {
       return { type: 'dice-rolled', playerId: doc.playerId, playerNickname: p['playerNickname'], die1: p['die1'], die2: p['die2'], total: p['total'] };
     case 'player-moved':
       if (typeof p['playerNickname'] !== 'string' || typeof p['tileId'] !== 'number' || typeof p['tileName'] !== 'string') return null;
-      return { type: 'player-moved', playerId: doc.playerId, playerNickname: p['playerNickname'], tileId: p['tileId'], tileName: p['tileName'] };
+      return {
+        type: 'player-moved',
+        playerId: doc.playerId,
+        playerNickname: p['playerNickname'],
+        tileId: p['tileId'],
+        tileName: p['tileName'],
+        ...(typeof p['collectedGoBonus'] === 'boolean' ? { collectedGoBonus: p['collectedGoBonus'] } : {}),
+      };
     case 'property-bought':
       if (typeof p['playerNickname'] !== 'string' || typeof p['tileId'] !== 'number' || typeof p['tileName'] !== 'string' || typeof p['price'] !== 'number') return null;
       return { type: 'property-bought', playerId: doc.playerId, playerNickname: p['playerNickname'], tileId: p['tileId'], tileName: p['tileName'], price: p['price'] };
@@ -66,6 +73,15 @@ export function documentToLogEntry(doc: EventLogDocument): GameLogEntry | null {
         winnerId: p['winnerId'] === '' ? null : p['winnerId'],
         winnerNickname: p['winnerNickname'] === '' ? null : p['winnerNickname'],
         amount: p['amount'],
+      };
+    case 'card-drawn':
+      if (typeof p['playerNickname'] !== 'string' || (p['deckType'] !== 'chance' && p['deckType'] !== 'community') || typeof p['cardText'] !== 'string') return null;
+      return {
+        type: 'card-drawn',
+        playerId: doc.playerId,
+        playerNickname: p['playerNickname'],
+        deckType: p['deckType'],
+        cardText: p['cardText'],
       };
     default:
       return null;

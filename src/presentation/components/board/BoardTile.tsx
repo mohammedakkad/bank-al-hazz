@@ -13,6 +13,7 @@ export interface BoardTileProps {
 
 function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }: BoardTileProps) {
   const isProperty = tile.type === 'property';
+  const isStart = tile.type === 'start';
   const Icon = tile.type === 'utility' ? getUtilityIcon(tile.name) : TILE_ICONS[tile.type];
 
   return (
@@ -22,11 +23,16 @@ function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }
       aria-pressed={isSelected}
       aria-label={tile.name}
       className={[
-        'relative flex flex-col overflow-hidden border border-board-line bg-board-tile',
+        'relative flex flex-col overflow-hidden bg-board-tile',
         'transition-colors duration-150 ease-out',
         'hover:bg-[#1D2740] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400',
         isSelected ? 'ring-2 ring-amber-400 ring-inset z-10' : '',
-        isCorner ? 'items-center justify-center gap-1 p-1' : 'items-stretch justify-between p-0.5',
+        // الزوايا الأربع (البداية/السجن/وقوف حر/اذهب للسجن) بنفس البروز البصري تماماً —
+        // Bug 2 كان البداية تحديداً بلا حدود مميّزة رغم إن باقي الزوايا كانت كذلك أصلاً
+        // بنفس شرط isCorner، فقط الحدود اللونية كانت ناقصة على المستوى العام لكل الزوايا.
+        isCorner
+          ? 'z-10 items-center justify-center gap-1 border-2 border-amber-400/70 p-1'
+          : 'items-stretch justify-between border border-board-line p-0.5',
       ].join(' ')}
     >
       {isProperty && (
@@ -49,10 +55,17 @@ function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }
         </span>
       ) : (
         <span className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-          {Icon && <Icon aria-hidden="true" className="h-3 w-3 text-amber-400 sm:h-5 sm:w-5" />}
-          <span className="text-[7px] font-medium leading-tight text-white sm:text-[10px]">
+          {Icon && (
+            <Icon
+              aria-hidden="true"
+              className={isCorner ? 'h-5 w-5 text-amber-400 sm:h-7 sm:w-7' : 'h-3 w-3 text-amber-400 sm:h-5 sm:w-5'}
+            />
+          )}
+          <span className={['font-medium leading-tight text-white', isCorner ? 'text-[8px] sm:text-xs' : 'text-[7px] sm:text-[10px]'].join(' ')}>
             {tile.name}
           </span>
+          {/* Bug 2: تغذية راجعة دائمة ("لمّة" مونوبولي الكلاسيكية) إن الهبوط/المرور من هنا يمنح 200 جنيه */}
+          {isStart && <span className="text-[7px] font-bold text-amber-400 sm:text-[10px]">+200 جنيه</span>}
         </span>
       )}
 

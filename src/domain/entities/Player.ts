@@ -52,6 +52,11 @@ export class Player {
     return new Player({ ...this.props, position: newPosition });
   }
 
+  /** إضافة لتفادي تصادم لون الرمز بين لاعبين بنفس الغرفة (انظر joinGame بـFirestoreGameRepository) */
+  withTokenColor(newTokenColor: string): Player {
+    return new Player({ ...this.props, tokenColor: newTokenColor });
+  }
+
   receive(amount: Money): Player {
     return new Player({ ...this.props, money: this.props.money.add(amount) });
   }

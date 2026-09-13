@@ -6,7 +6,9 @@ import { PlayerHud } from '../components/hud/PlayerHud';
 import { EventLog } from '../components/hud/EventLog';
 import { BuyPropertyModal } from '../components/modals/BuyPropertyModal';
 import { AuctionModal } from '../components/modals/AuctionModal';
+import { CardModal } from '../components/modals/CardModal';
 import { BOARD_TILES, type PropertyTile } from '../../domain/entities/BoardTile';
+import type { Card, DeckType } from '../../domain/entities/Card';
 import { Money } from '../../domain/valueObjects/Money';
 import type { Player } from '../../domain/entities/Player';
 import type { AuctionState } from '../../domain/interfaces/AuctionState';
@@ -17,6 +19,8 @@ import { isTripleDoubles, JAIL_FINE } from '../../domain/gameRules/JailRules';
 import type { GameSnapshot, GameLogEntry } from '../../domain/interfaces/IGameRepository';
 import { playJailTurn } from '../../application/useCases/JailTurnUseCase';
 import { buyProperty, type BuyPropertyFailureReason } from '../../application/useCases/BuyPropertyUseCase';
+import { applyCardEffect } from '../../application/useCases/CardEffectUseCase';
+import { drawCard, returnGetOutOfJailFreeCard, holdsGetOutOfJailFree } from '../../domain/gameRules/CardDeck';
 import {
   startAuction,
   placeBid,
@@ -79,6 +83,7 @@ export function GameScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [pendingBuy, setPendingBuy] = useState<PendingBuy | null>(null);
   const [auctionPending, setAuctionPending] = useState<{ readonly consecutiveDoubles: number; readonly actingPlayerId: string } | null>(null);
+  const [drawnCard, setDrawnCard] = useState<{ readonly card: Card; readonly deckType: DeckType } | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isRolling, setIsRolling] = useState(false);
   const [lastDiceResult, setLastDiceResult] = useState<DiceResult | null>(null);
@@ -118,11 +123,21 @@ export function GameScreen() {
       setIsBusy(false);
       return;
     }
-    if (consecutiveDoubles > 0) {
-      void performRoll(actingPlayer, consecutiveDoubles);
-    } else {
-      void endTurn(actingPlayerId).then(() => setIsBusy(false));
+    async function resumeAfterAuction() {
+      try {
+        if (consecutiveDoubles > 0) {
+          await performRoll(actingPlayer!, consecutiveDoubles);
+        } else {
+          await endTurn(actingPlayerId);
+          setIsBusy(false);
+        }
+      } catch (error) {
+        console.error('resumeAfterAuction failed', error);
+        setMessage('حدث خطأ بعد انتهاء المزاد، حاول رمي النرد مرة أخرى إن ظهر الزر');
+        setIsBusy(false);
+      }
     }
+    void resumeAfterAuction();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot?.activeAuction, auctionPending]);
 
@@ -170,6 +185,10 @@ export function GameScreen() {
       return 'paused'; // الدور انتهى فعليًا (مش استمرار عادي)
     }
 
+    if (tile.type === 'chance' || tile.type === 'community') {
+      return resolveCardDraw(movedPlayer, othersBeforeMove, consecutiveDoubles, tile.type);
+    }
+
     if (tile.type !== 'property') return 'continue';
 
     const rosterAfterMove = [...othersBeforeMove, movedPlayer];
@@ -198,6 +217,64 @@ export function GameScreen() {
       });
     }
     // rentResult.success == false هنا يعني العقار ملكك أنت (self-rent) — لا إجراء مطلوب
+    return 'continue';
+  }
+
+  /**
+   * Bug 4/Feature — يسحب بطاقة فرصة/صندوق مجتمع، يطبّق أثرها، ويعرضها بالـmodal.
+   * لو الأثر حرّك اللاعب لمربع جديد، نُعيد استدعاء resolveLanding على المربع الجديد
+   * (نفس القاعدة الرسمية: الهبوط الناتج عن بطاقة يُحسَم بنفس طريقة أي هبوط عادي —
+   * عقار فاضي يفتح شراء، عقار مملوك يدفع إيجار، حتى لو أدّى لمربع بطاقة آخر).
+   */
+  async function resolveCardDraw(
+    movedPlayer: Player,
+    othersBeforeMove: readonly Player[],
+    consecutiveDoubles: number,
+    deckType: DeckType,
+  ): Promise<'paused' | 'continue'> {
+    if (!roomId || !snapshot) return 'continue';
+
+    const { card, deckState: deckStateAfterDraw } = drawCard(snapshot.deckState, deckType, movedPlayer.id);
+    await gameRepository.updateDeckState(roomId, deckStateAfterDraw);
+    setDrawnCard({ card, deckType });
+
+    const effectResult = applyCardEffect(card.effect, movedPlayer, othersBeforeMove);
+    await gameRepository.updatePlayerState(roomId, effectResult.player);
+
+    // pay-each-player/collect-from-each-player فقط هي اللي تُرجع مصفوفة others جديدة فعلياً
+    if (effectResult.others !== othersBeforeMove) {
+      for (const updatedOther of effectResult.others) {
+        await gameRepository.updatePlayerState(roomId, updatedOther);
+      }
+    }
+
+    await gameRepository.logEvent(roomId, {
+      type: 'card-drawn',
+      playerId: effectResult.player.id,
+      playerNickname: effectResult.player.nickname,
+      deckType,
+      cardText: card.text,
+    });
+
+    if (effectResult.sentToJail) {
+      setMessage('اذهب إلى السجن!');
+      await endTurn(effectResult.player.id);
+      return 'paused';
+    }
+
+    if (effectResult.heldGetOutOfJailFree) {
+      setMessage('حصلت على بطاقة اخرج من السجن مجاناً! 🎉');
+      return 'continue';
+    }
+
+    // الأثر حرّك اللاعب فعلياً لمربع جديد — لازم نحسم هبوطه هناك بنفس القاعدة العادية
+    if (effectResult.player.position !== movedPlayer.position) {
+      const updatedOthers = othersBeforeMove.map(
+        (other) => effectResult.others.find((updated) => updated.id === other.id) ?? other,
+      );
+      return resolveLanding(effectResult.player, updatedOthers, consecutiveDoubles);
+    }
+
     return 'continue';
   }
 
@@ -238,6 +315,7 @@ export function GameScreen() {
     let movedPlayer = currentPlayer.moveTo(newPosition);
     if (passedStart) {
       movedPlayer = movedPlayer.receive(Money.of(START_BONUS));
+      setMessage(`${movedPlayer.nickname} مرّ من البداية، قبض 200 جنيه`);
     }
     await gameRepository.updatePlayerState(roomId, movedPlayer);
 
@@ -249,6 +327,7 @@ export function GameScreen() {
         playerNickname: movedPlayer.nickname,
         tileId: tile.id,
         tileName: tile.name,
+        collectedGoBonus: passedStart,
       });
     }
 
@@ -333,46 +412,67 @@ export function GameScreen() {
     setIsBusy(true);
     setMessage(null);
 
-    if (me.isInJail) {
-      await performJailRoll(me);
-    } else {
-      await performRoll(me, 0);
+    try {
+      if (me.isInJail) {
+        await performJailRoll(me);
+      } else {
+        await performRoll(me, 0);
+      }
+    } catch (error) {
+      // Bug 3 (دفاع إضافي): أي خطأ غير متوقع بسلسلة رمي النرد/الحركة/الهبوط بالكامل
+      // ما عاد يعلّق isBusy للأبد — اللاعب يقدر يعيد المحاولة فوراً.
+      console.error('handleRollDice failed', error);
+      setMessage('حدث خطأ غير متوقع، حاول رمي النرد مرة أخرى');
+      setPendingBuy(null);
+      setIsBusy(false);
     }
   }
 
   async function handleBuyAccept() {
     if (!pendingBuy || !roomId || !snapshot) return;
-    const othersBeforeMove = snapshot.players.filter((player) => player.id !== pendingBuy.movedPlayer.id);
-    const roster = [...othersBeforeMove, pendingBuy.movedPlayer];
-    const tile = BOARD_TILES.find((candidate) => candidate.id === pendingBuy.tileId);
-    const result = buyProperty(pendingBuy.movedPlayer, roster, pendingBuy.tileId);
+    try {
+      const othersBeforeMove = snapshot.players.filter((player) => player.id !== pendingBuy.movedPlayer.id);
+      const roster = [...othersBeforeMove, pendingBuy.movedPlayer];
+      const tile = BOARD_TILES.find((candidate) => candidate.id === pendingBuy.tileId);
+      const result = buyProperty(pendingBuy.movedPlayer, roster, pendingBuy.tileId);
 
-    let finalPlayer = pendingBuy.movedPlayer;
-    if (result.success) {
-      finalPlayer = result.player;
-      await gameRepository.updatePlayerState(roomId, result.player);
-      if (tile) {
-        await gameRepository.logEvent(roomId, {
-          type: 'property-bought',
-          playerId: result.player.id,
-          playerNickname: result.player.nickname,
-          tileId: tile.id,
-          tileName: tile.name,
-          price: 'purchasePrice' in tile ? tile.purchasePrice : 0,
-        });
+      let finalPlayer = pendingBuy.movedPlayer;
+      if (result.success) {
+        finalPlayer = result.player;
+        await gameRepository.updatePlayerState(roomId, result.player);
+        if (tile) {
+          await gameRepository.logEvent(roomId, {
+            type: 'property-bought',
+            playerId: result.player.id,
+            playerNickname: result.player.nickname,
+            tileId: tile.id,
+            tileName: tile.name,
+            price: 'purchasePrice' in tile ? tile.purchasePrice : 0,
+          });
+        }
+      } else {
+        setMessage(BUY_FAILURE_MESSAGES[result.reason]);
       }
-    } else {
-      setMessage(BUY_FAILURE_MESSAGES[result.reason]);
-    }
 
-    const consecutiveDoubles = pendingBuy.consecutiveDoubles;
-    setPendingBuy(null);
+      const consecutiveDoubles = pendingBuy.consecutiveDoubles;
+      setPendingBuy(null);
 
-    if (consecutiveDoubles > 0) {
-      await performRoll(finalPlayer, consecutiveDoubles);
-    } else {
-      await endTurn(finalPlayer.id);
+      if (consecutiveDoubles > 0) {
+        await performRoll(finalPlayer, consecutiveDoubles);
+      } else {
+        await endTurn(finalPlayer.id);
+        setIsBusy(false);
+      }
+    } catch (error) {
+      // Bug 3: أي خطأ هنا (مثلاً كتابة Firestore فشلت) يُصفّر pendingBuy فوراً —
+      // BuyPropertyModal يرصد تغيّر tile?.id ويصفّر "جاري الشراء" تلقائياً من جهته،
+      // وهنا نصفّر isBusy لضمان رجوع زر رمي النرد تفاعلياً كذلك.
+      console.error('handleBuyAccept failed', error);
+      setMessage('تعذّر إتمام الشراء بسبب خطأ غير متوقع، حاول لاحقاً');
+      setPendingBuy(null);
+      setAuctionPending(null);
       setIsBusy(false);
+      throw error; // إعادة الرمي مقصودة: BuyPropertyModal.handleBuyClick يلتقطها لعرض رسالته الخاصة أيضاً
     }
   }
 
@@ -381,10 +481,17 @@ export function GameScreen() {
     const { movedPlayer, consecutiveDoubles, tileId } = pendingBuy;
     setPendingBuy(null);
 
-    const auction = startAuction(tileId, snapshot.players, movedPlayer.id);
-    setAuctionPending({ consecutiveDoubles, actingPlayerId: movedPlayer.id });
-    await gameRepository.startAuction(roomId, auction);
-    // isBusy يضل true — الـeffect فوق (auctionPending) هو من يكمل الدور لما المزاد ينتهي.
+    try {
+      const auction = startAuction(tileId, snapshot.players, movedPlayer.id);
+      setAuctionPending({ consecutiveDoubles, actingPlayerId: movedPlayer.id });
+      await gameRepository.startAuction(roomId, auction);
+      // isBusy يضل true — الـeffect فوق (auctionPending) هو من يكمل الدور لما المزاد ينتهي.
+    } catch (error) {
+      console.error('handleBuySkip failed', error);
+      setMessage('تعذّر بدء المزاد بسبب خطأ غير متوقع');
+      setAuctionPending(null);
+      setIsBusy(false);
+    }
   }
 
   /**
@@ -421,10 +528,15 @@ export function GameScreen() {
       setMessage(AUCTION_BID_FAILURE_MESSAGES[result.reason]);
       return;
     }
-    if (isAuctionOver(result.auction)) {
-      await finishAuction(result.auction);
-    } else {
-      await gameRepository.placeAuctionBid(roomId, result.auction);
+    try {
+      if (isAuctionOver(result.auction)) {
+        await finishAuction(result.auction);
+      } else {
+        await gameRepository.placeAuctionBid(roomId, result.auction);
+      }
+    } catch (error) {
+      console.error('handleAuctionBid failed', error);
+      setMessage('تعذّرت المزايدة بسبب خطأ غير متوقع، حاول مرة أخرى');
     }
   }
 
@@ -435,10 +547,31 @@ export function GameScreen() {
       setMessage(AUCTION_PASS_FAILURE_MESSAGES[result.reason]);
       return;
     }
-    if (isAuctionOver(result.auction)) {
-      await finishAuction(result.auction);
-    } else {
-      await gameRepository.passAuctionBid(roomId, result.auction);
+    try {
+      if (isAuctionOver(result.auction)) {
+        await finishAuction(result.auction);
+      } else {
+        await gameRepository.passAuctionBid(roomId, result.auction);
+      }
+    } catch (error) {
+      console.error('handleAuctionPass failed', error);
+      setMessage('تعذّر تسجيل الانسحاب بسبب خطأ غير متوقع، حاول مرة أخرى');
+    }
+  }
+
+  async function handleUseGetOutOfJailFree() {
+    if (!me || !roomId || !snapshot || isBusy) return;
+    const deckType = holdsGetOutOfJailFree(snapshot.deckState, me.id);
+    if (!deckType || !me.isInJail) return;
+
+    try {
+      const releasedPlayer = me.releaseFromJail();
+      await gameRepository.updatePlayerState(roomId, releasedPlayer);
+      await gameRepository.updateDeckState(roomId, returnGetOutOfJailFreeCard(snapshot.deckState, deckType));
+      setMessage('استخدمت بطاقة اخرج من السجن مجاناً — دورك الآن يكمل عادي');
+    } catch (error) {
+      console.error('handleUseGetOutOfJailFree failed', error);
+      setMessage('تعذّر استخدام البطاقة بسبب خطأ غير متوقع، حاول مرة أخرى');
     }
   }
 
@@ -482,6 +615,7 @@ export function GameScreen() {
     ? (BOARD_TILES.find((tile): tile is PropertyTile => tile.type === 'property' && tile.id === snapshot.activeAuction?.tileId) ?? null)
     : null;
   const nicknameById = new Map(snapshot.players.map((player) => [player.id, player.nickname]));
+  const myGetOutOfJailFreeDeck = holdsGetOutOfJailFree(snapshot.deckState, me.id);
 
   return (
     <main className="flex min-h-screen flex-col gap-3 bg-board-bg p-3 pb-0 text-white sm:p-6 sm:pb-0">
@@ -495,6 +629,20 @@ export function GameScreen() {
         <p role="status" className="rounded-md border border-board-line bg-board-tile px-3 py-2 text-sm text-amber-300">
           {message}
         </p>
+      )}
+
+      {me.isInJail && myGetOutOfJailFreeDeck && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-amber-400 bg-board-tile px-3 py-2 text-sm">
+          <span>معك بطاقة اخرج من السجن مجاناً ({myGetOutOfJailFreeDeck === 'chance' ? 'فرصة' : 'صندوق المجتمع'})</span>
+          <button
+            type="button"
+            onClick={handleUseGetOutOfJailFree}
+            disabled={isBusy}
+            className="shrink-0 rounded-md bg-amber-400 px-2 py-1 text-xs font-bold text-board-bg disabled:opacity-40"
+          >
+            استخدمها الآن
+          </button>
+        </div>
       )}
 
       <EventLog entries={logEntries} />
@@ -545,6 +693,12 @@ export function GameScreen() {
         myMoney={me.money.value}
         onBid={handleAuctionBid}
         onPass={handleAuctionPass}
+      />
+
+      <CardModal
+        card={drawnCard?.card ?? null}
+        deckType={drawnCard?.deckType ?? null}
+        onDismiss={() => setDrawnCard(null)}
       />
 
       <PlayerHud
