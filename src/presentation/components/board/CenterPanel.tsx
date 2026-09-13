@@ -1,3 +1,5 @@
+import { CELL_PERCENT } from '../../../shared/utils/boardLayout';
+
 export interface CenterPanelProps {
   readonly currentPlayerNickname?: string | undefined;
 }
@@ -5,7 +7,13 @@ export interface CenterPanelProps {
 export function CenterPanel({ currentPlayerNickname }: CenterPanelProps) {
   return (
     <div
-      className="col-start-2 col-end-11 row-start-2 row-end-11 flex flex-col items-center justify-center gap-2 rounded-lg border border-board-line bg-board-bg"
+      className="absolute flex flex-col items-center justify-center gap-2 rounded-lg border border-board-line bg-board-bg"
+      style={{
+        left: `${CELL_PERCENT}%`,
+        top: `${CELL_PERCENT}%`,
+        width: `${CELL_PERCENT * 9}%`,
+        height: `${CELL_PERCENT * 9}%`,
+      }}
     >
       <h2 className="text-xl font-bold text-amber-400 sm:text-3xl">بنك الحظ</h2>
       {currentPlayerNickname ? (

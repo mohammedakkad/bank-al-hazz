@@ -8,6 +8,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -19,7 +20,7 @@ import { logEntryToDocument, documentToLogEntry, type EventLogDocument } from '.
 import { generateRoomCode } from '../../shared/utils/roomCode';
 import { pickAvailableTokenColor } from '../../shared/utils/tokenColor';
 import type { Player } from '../../domain/entities/Player';
-import type { GameSnapshot, GameLogEntry, IGameRepository } from '../../domain/interfaces/IGameRepository';
+import { ColorAlreadyTakenError, type GameSnapshot, type GameLogEntry, type IGameRepository } from '../../domain/interfaces/IGameRepository';
 import type { AuctionState } from '../../domain/interfaces/AuctionState';
 import { createInitialDeckState, type DeckState } from '../../domain/gameRules/CardDeck';
 
@@ -115,6 +116,40 @@ export class FirestoreGameRepository implements IGameRepository {
    * (الواجهة IGameRepository لا تملك حقل hostId)، فأي كود يستخدم هذا الـrepository
    * ويحتاج معرفة "مين الـhost" لازم يعتمد على `players[0]?.id` تحديداً.
    */
+  /**
+   * Bug 6 — نقرأ خارج المعاملة فقط لمعرفة IDs بقية اللاعبين بالغرفة (لا تدعم
+   * معاملات Firestore قراءة query كاملة، فقط مستندات محدَّدة بمعرّفها). داخل
+   * المعاملة نفسها نُعيد قراءة كل مستند لاعب آخر بلحظة التنفيذ الفعلية (وليس
+   * الحالة اللي قرأناها بالخطوة السابقة، والتي قد تكون تجاوزها الزمن) — فلو
+   * لاعبان ضغطا نفس اللون بنفس اللحظة تقريباً، Firestore يُعيد محاولة تنفيذ
+   * إحدى المعاملتين تلقائياً بعد نجاح الأخرى، فتكتشف حينها إن اللون صار مأخوذاً
+   * وترفض — هذا بالضبط ما يمنع فوز لاعبين بنفس اللون.
+   */
+  async confirmPlayerColor(gameId: string, playerId: string, newColor: string): Promise<void> {
+    const playersSnapshot = await getDocs(playersCollectionRef(gameId));
+    const otherPlayerIds = playersSnapshot.docs.map((playerDoc) => playerDoc.id).filter((id) => id !== playerId);
+    const targetDocRef = doc(playersCollectionRef(gameId), playerId);
+
+    await runTransaction(firestore, async (transaction) => {
+      const otherDocSnaps = await Promise.all(
+        otherPlayerIds.map((id) => transaction.get(doc(playersCollectionRef(gameId), id))),
+      );
+      const targetDocSnap = await transaction.get(targetDocRef);
+
+      const colorAlreadyTaken = otherDocSnaps.some(
+        (snap) => (snap.data() as PlayerDocument | undefined)?.tokenColor === newColor,
+      );
+      if (colorAlreadyTaken) {
+        throw new ColorAlreadyTakenError(newColor);
+      }
+      if (!targetDocSnap.exists()) {
+        throw new Error('confirmPlayerColor: player document not found');
+      }
+
+      transaction.update(targetDocRef, { tokenColor: newColor, hasConfirmedColor: true });
+    });
+  }
+
   subscribeToGame(gameId: string, onUpdate: (snapshot: GameSnapshot) => void): () => void {
     let latestGameDoc: GameDocument | null = null;
     let latestPlayers: readonly Player[] = [];

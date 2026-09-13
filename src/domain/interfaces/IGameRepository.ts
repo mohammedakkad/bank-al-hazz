@@ -2,6 +2,14 @@ import type { Player } from '../entities/Player';
 import type { AuctionState } from './AuctionState';
 import type { DeckState } from '../gameRules/CardDeck';
 
+/** Bug 6 — يُرمى من confirmPlayerColor لما لاعب آخر يسبق بنفس اللون بمعاملة متزامنة */
+export class ColorAlreadyTakenError extends Error {
+  constructor(color: string) {
+    super(`اللون ${color} تم اختياره للتو من لاعب آخر`);
+    this.name = 'ColorAlreadyTakenError';
+  }
+}
+
 export interface GameSnapshot {
   readonly gameId: string;
   readonly status: 'lobby' | 'in-progress' | 'finished';
@@ -40,6 +48,15 @@ export type GameLogEntry =
 export interface IGameRepository {
   createGame(hostPlayer: Player): Promise<string>;
   joinGame(gameId: string, player: Player): Promise<void>;
+
+  /**
+   * Bug 6 — يحاول تثبيت لون رمز اللاعب بمعاملة compare-and-set: يرفض لو أي لاعب
+   * آخر بنفس الغرفة يحمل هذا اللون فعلاً (سواء مؤكَّد أو حتى افتراضي مؤقت) لحظة
+   * تنفيذ المعاملة، بغض النظر عن أي قراءة سابقة على العميل — يمنع فوز لاعبين
+   * بنفس اللون بسباق توقيت (كلاهما يضغط بنفس اللحظة على نفس اللون "المتاح" ظاهرياً).
+   * يرمي خطأً بنوع ColorAlreadyTakenError لو خسر السباق.
+   */
+  confirmPlayerColor(gameId: string, playerId: string, newColor: string): Promise<void>;
   /** ينقل حالة اللعبة من 'lobby' إلى 'in-progress' — يستدعيها المضيف فقط عند الضغط على "ابدأ اللعبة" */
   startGame(gameId: string): Promise<void>;
   subscribeToGame(gameId: string, onUpdate: (snapshot: GameSnapshot) => void): () => void;

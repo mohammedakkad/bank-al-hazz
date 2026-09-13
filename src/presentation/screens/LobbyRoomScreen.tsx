@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Check } from 'lucide-react';
 import type { GameSnapshot } from '../../domain/interfaces/IGameRepository';
+import { ColorAlreadyTakenError } from '../../domain/interfaces/IGameRepository';
 import { useGameSession } from '../hooks/useGameSession';
+import { TOKEN_COLOR_PALETTE } from '../../shared/constants/gameConfig';
 
 const MIN_PLAYERS_TO_START = 2;
 /** مدة شاشة "اللعبة تبدأ..." — نفس القيمة لكل اللاعبين حتى ينتقلوا معًا تقريبًا بنفس اللحظة */
@@ -16,6 +19,8 @@ export function LobbyRoomScreen() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [colorError, setColorError] = useState<string | null>(null);
+  const [isConfirmingColor, setIsConfirmingColor] = useState(false);
 
   // اشتراك حي واحد فقط لهذه الشاشة — يغذي كل من قائمة اللاعبين وإشارة بدء اللعبة معًا
   useEffect(() => {
@@ -46,6 +51,30 @@ export function LobbyRoomScreen() {
     }
   }
 
+  /**
+   * Bug 6: نداء واحد لمعاملة compare-and-set (FirestoreGameRepository.confirmPlayerColor).
+   * لو خسر اللاعب سباق التوقيت (لاعب آخر أخذ نفس اللون بنفس اللحظة تقريباً)، الرفض
+   * يصل هنا كـColorAlreadyTakenError، ونعرض رسالة واضحة ونطلب يختار غيره — الحالة
+   * المعروضة (منتزع/متاح) نفسها بترجع صح تلقائياً بمجرد وصول تحديث الاشتراك.
+   */
+  async function handleSelectColor(color: string) {
+    if (!roomId || !userId || isConfirmingColor) return;
+    setIsConfirmingColor(true);
+    setColorError(null);
+    try {
+      await gameRepository.confirmPlayerColor(roomId, userId, color);
+    } catch (error) {
+      if (error instanceof ColorAlreadyTakenError) {
+        setColorError('هذا اللون تم اختياره للتو، اختر لوناً آخر');
+      } else {
+        console.error('confirmPlayerColor failed', error);
+        setColorError('تعذّر تأكيد اللون، حاول مرة أخرى');
+      }
+    } finally {
+      setIsConfirmingColor(false);
+    }
+  }
+
   if (!roomId) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-board-bg text-white">
@@ -58,7 +87,9 @@ export function LobbyRoomScreen() {
   // أول لاعب بالمصفوفة = صاحب الغرفة (مرتّبة بوقت الانضمام من الـrepository)
   const hostId = players[0]?.id ?? null;
   const isHost = userId !== null && userId === hostId;
-  const canStart = isHost && players.length >= MIN_PLAYERS_TO_START;
+  const me = players.find((player) => player.id === userId) ?? null;
+  const everyoneConfirmedColor = players.length > 0 && players.every((player) => player.hasConfirmedColor);
+  const canStart = isHost && players.length >= MIN_PLAYERS_TO_START && everyoneConfirmedColor;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col items-center gap-6 bg-board-bg p-6 text-white">
@@ -84,6 +115,9 @@ export function LobbyRoomScreen() {
               {player.id === hostId && (
                 <span className="text-xs text-amber-400">(المضيف)</span>
               )}
+              {!player.hasConfirmedColor && (
+                <span className="text-xs text-gray-500">يختار لونه الآن...</span>
+              )}
             </li>
           ))}
           {players.length === 0 && (
@@ -91,6 +125,49 @@ export function LobbyRoomScreen() {
           )}
         </ul>
       </div>
+
+      {me && (
+        <div className="flex w-full flex-col gap-2">
+          <span className="text-sm text-gray-300">
+            {me.hasConfirmedColor ? 'لونك' : 'اختر لون رمزك'}
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {TOKEN_COLOR_PALETTE.map((color) => {
+              const takenBy = players.find(
+                (player) => player.tokenColor === color && player.hasConfirmedColor && player.id !== me.id,
+              );
+              const isMine = me.tokenColor === color && me.hasConfirmedColor;
+              const isDisabled = Boolean(takenBy) || isConfirmingColor;
+
+              return (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={takenBy ? `${color} — أخذه ${takenBy.nickname}` : `اختر اللون ${color}`}
+                  aria-pressed={isMine}
+                  disabled={isDisabled}
+                  onClick={() => handleSelectColor(color)}
+                  className={[
+                    'relative h-9 w-9 rounded-full border-2 transition-transform disabled:cursor-not-allowed',
+                    isMine ? 'scale-110 border-white' : 'border-transparent',
+                    takenBy ? 'opacity-30' : '',
+                  ].join(' ')}
+                  style={{ backgroundColor: color }}
+                >
+                  {isMine && (
+                    <Check aria-hidden="true" className="absolute inset-0 m-auto h-4 w-4 text-white" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {colorError && (
+            <p role="alert" className="text-xs text-red-400">
+              {colorError}
+            </p>
+          )}
+        </div>
+      )}
 
       {isHost ? (
         <button
@@ -101,9 +178,11 @@ export function LobbyRoomScreen() {
         >
           {isStarting
             ? 'جاري البدء...'
-            : canStart
-              ? 'ابدأ اللعبة'
-              : `بانتظار لاعب آخر (الحد الأدنى ${MIN_PLAYERS_TO_START})`}
+            : players.length < MIN_PLAYERS_TO_START
+              ? `بانتظار لاعب آخر (الحد الأدنى ${MIN_PLAYERS_TO_START})`
+              : !everyoneConfirmedColor
+                ? 'بانتظار تأكيد الجميع لألوانهم'
+                : 'ابدأ اللعبة'}
         </button>
       ) : (
         <p className="text-sm text-gray-400">بانتظار المضيف لبدء اللعبة</p>

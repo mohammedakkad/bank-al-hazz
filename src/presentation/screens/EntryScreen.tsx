@@ -5,14 +5,13 @@ import { Money } from '../../domain/valueObjects/Money';
 import { useGameSession } from '../hooks/useGameSession';
 import { validateNickname } from '../../shared/utils/nicknameValidation';
 import { normalizeRoomCode } from '../../shared/utils/roomCode';
-import { STARTING_MONEY_AMOUNT, TOKEN_COLOR_PALETTE } from '../../shared/constants/gameConfig';
+import { STARTING_MONEY_AMOUNT } from '../../shared/constants/gameConfig';
 
 type EntryMode = 'idle' | 'join';
 
 export function EntryScreen() {
   const navigate = useNavigate();
-  const { userId, isAuthReady, gameRepository, nickname, setNickname, tokenColor, setTokenColor } =
-    useGameSession();
+  const { userId, isAuthReady, gameRepository, nickname, setNickname, tokenColor } = useGameSession();
 
   const [mode, setMode] = useState<EntryMode>('idle');
   const [roomCodeInput, setRoomCodeInput] = useState('');
@@ -21,6 +20,13 @@ export function EntryScreen() {
 
   const canSubmit = isAuthReady && userId !== null && !isSubmitting;
 
+  /**
+   * Bug 6: ما عاد نجمع لون الرمز هون. tokenColor هنا مجرد قيمة افتراضية مؤقتة
+   * (provisional) — أي لون ثابت يكفي لأن Player.create() يتطلّبه كحقل إلزامي،
+   * لكن اللاعب سيؤكّد لونه الفعلي لاحقاً بشاشة اللوبي (LobbyRoomScreen) بعد ما
+   * يصير عضواً بقائمة اللاعبين المشتركة فعلياً — عندها فقط تصير "مين أخذ أي لون"
+   * معلومة متاحة للتنسيق بين اللاعبين.
+   */
   function buildPlayer(): Player | null {
     const nicknameResult = validateNickname(nickname);
     if (!nicknameResult.valid) {
@@ -93,26 +99,6 @@ export function EntryScreen() {
           placeholder="اكتب اسمك هنا"
           className="rounded-md border border-board-line bg-board-tile px-3 py-2 text-white outline-none focus:border-amber-400"
         />
-      </div>
-
-      <div className="flex w-full flex-col gap-2">
-        <span className="text-sm text-gray-300">لون رمزك</span>
-        <div className="flex gap-2">
-          {TOKEN_COLOR_PALETTE.map((color) => (
-            <button
-              key={color}
-              type="button"
-              aria-label={`اختر اللون ${color}`}
-              aria-pressed={tokenColor === color}
-              onClick={() => setTokenColor(color)}
-              className={[
-                'h-8 w-8 rounded-full border-2 transition-transform',
-                tokenColor === color ? 'scale-110 border-white' : 'border-transparent',
-              ].join(' ')}
-              style={{ backgroundColor: color }}
-            />
-          ))}
-        </div>
       </div>
 
       {errorMessage && (

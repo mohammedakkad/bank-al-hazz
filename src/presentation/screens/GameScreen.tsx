@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useGameSession } from '../hooks/useGameSession';
 import { Board, type PropertyOwnership } from '../components/board/Board';
@@ -72,6 +72,17 @@ interface PendingBuy {
   readonly consecutiveDoubles: number;
 }
 
+/**
+ * Bug 2 (جزء من السبب الجذري): كان resolveLanding يرجع 'paused' لحالتين مختلفتين
+ * تماماً — "الدور انتهى فعلياً" (سجن) و"الدور متوقّف بانتظار قرار شراء" — والمستدعي
+ * (performRoll/performJailRoll) كان يفرّق بينهما بقراءة `pendingBuy` (state) مباشرة
+ * بعد استدعاء resolveLanding، رغم إن `setPendingBuy` بالداخل قد لا يكون انعكس على
+ * الـclosure المحلي بعد (تحديثات React state غير متزامنة مع القراءة الفورية) —
+ * فكان أحياناً يُصفّر isBusy رغم إن مودال الشراء لسا مفتوح، فيسمح برمي نرد ثانٍ
+ * متزامن. الحل: نوع نتيجة صريح بثلاث حالات بدل بوليان واحد ملتبس.
+ */
+type LandingOutcome = 'continue' | 'awaiting-buy' | 'turn-ended';
+
 export function GameScreen() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
@@ -87,6 +98,20 @@ export function GameScreen() {
   const [isBusy, setIsBusy] = useState(false);
   const [isRolling, setIsRolling] = useState(false);
   const [lastDiceResult, setLastDiceResult] = useState<DiceResult | null>(null);
+
+  /**
+   * Bug 2 (السبب الفعلي المؤكَّد): `isBusy` (state) لا يكفي وحده كقفل — تحديث الـstate
+   * غير متزامن مع إعادة الرسم؛ لو ضغط اللاعب مرتين بسرعة كبيرة (أو حتى نقرة مزدوجة
+   * حقيقية بمسة واحدة على الموبايل)، النقرة الثانية ممكن تُنفَّذ بنفس الـclosure
+   * القديم قبل ما React يُحدّث `disabled` بالـDOM فعلياً — فتُنفَّذ دالة الرمي مرتين
+   * فعلياً بالتوازي، كل واحدة تحسب نردها الخاص وتكتب فوق الأخرى بترتيب غير متوقَّع
+   * (لا توجد أي فحوصات تعارض إصدار/نسخة على كتابات Firestore هنا) — وهذا بالضبط ما
+   * يسبّب "تحرّك مرتين"/"شراء مرتين"، وأحياناً رسالة خطأ زائفة لما إحدى النسختين
+   * المتوازيتين تصادف حالة محلية (pendingBuy مثلاً) غيّرتها النسخة الأخرى تحتها.
+   * الإصلاح: قفل بـref عادي (مزامنته فورية، لا تنتظر إعادة رسم) يُفحص ويُضبط كأول
+   * سطر تنفيذي بكل معالج مخاطرة، قبل أي await أو حتى أي تحقق آخر.
+   */
+  const actionInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!roomId) return;
@@ -172,7 +197,7 @@ export function GameScreen() {
     movedPlayer: Player,
     othersBeforeMove: readonly Player[],
     consecutiveDoubles: number,
-  ): Promise<'paused' | 'continue'> {
+  ): Promise<LandingOutcome> {
     if (!roomId) return 'continue';
     const tile = BOARD_TILES.find((candidate) => candidate.id === movedPlayer.position);
     if (!tile) return 'continue';
@@ -182,7 +207,7 @@ export function GameScreen() {
       await gameRepository.updatePlayerState(roomId, jailedPlayer);
       setMessage('اذهب إلى السجن!');
       await endTurn(jailedPlayer.id);
-      return 'paused'; // الدور انتهى فعليًا (مش استمرار عادي)
+      return 'turn-ended'; // الدور انتهى فعليًا (مش استمرار عادي)
     }
 
     if (tile.type === 'chance' || tile.type === 'community') {
@@ -196,7 +221,7 @@ export function GameScreen() {
 
     if (!isOwnedByAnyone) {
       setPendingBuy({ tileId: tile.id, movedPlayer, consecutiveDoubles });
-      return 'paused';
+      return 'awaiting-buy';
     }
 
     const rentResult = payRent(movedPlayer, rosterAfterMove, tile.id);
@@ -231,7 +256,7 @@ export function GameScreen() {
     othersBeforeMove: readonly Player[],
     consecutiveDoubles: number,
     deckType: DeckType,
-  ): Promise<'paused' | 'continue'> {
+  ): Promise<LandingOutcome> {
     if (!roomId || !snapshot) return 'continue';
 
     const { card, deckState: deckStateAfterDraw } = drawCard(snapshot.deckState, deckType, movedPlayer.id);
@@ -259,7 +284,7 @@ export function GameScreen() {
     if (effectResult.sentToJail) {
       setMessage('اذهب إلى السجن!');
       await endTurn(effectResult.player.id);
-      return 'paused';
+      return 'turn-ended';
     }
 
     if (effectResult.heldGetOutOfJailFree) {
@@ -335,9 +360,12 @@ export function GameScreen() {
     const othersBeforeMove = snapshot.players.filter((player) => player.id !== currentPlayer.id);
     const landingOutcome = await resolveLanding(movedPlayer, othersBeforeMove, nextConsecutiveDoubles);
 
-    if (landingOutcome === 'paused') {
-      // إما وقف بانتظار قرار الشراء (isBusy يضل true لحد قرار المستخدم)، أو انتهى الدور فعليًا (سجن)
-      if (!pendingBuy) setIsBusy(false);
+    if (landingOutcome === 'turn-ended') {
+      setIsBusy(false);
+      return;
+    }
+    if (landingOutcome === 'awaiting-buy') {
+      // isBusy يضل true عمداً لحد ما اللاعب يقرر بمودال الشراء (BuyPropertyModal.onBuy/onSkip)
       return;
     }
 
@@ -398,8 +426,11 @@ export function GameScreen() {
     // الخروج من السجن ما بيمنح دور إضافي حتى لو كان بـdoubles — القاعدة الرسمية صريحة بهيك
     const othersBeforeMove = snapshot.players.filter((p) => p.id !== player.id);
     const landingOutcome = await resolveLanding(result.player, othersBeforeMove, 0);
-    if (landingOutcome === 'paused') {
-      if (!pendingBuy) setIsBusy(false);
+    if (landingOutcome === 'turn-ended') {
+      setIsBusy(false);
+      return;
+    }
+    if (landingOutcome === 'awaiting-buy') {
       return;
     }
 
@@ -408,7 +439,8 @@ export function GameScreen() {
   }
 
   async function handleRollDice() {
-    if (!me || !roomId || !snapshot || isBusy) return;
+    if (!me || !roomId || !snapshot || isBusy || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setIsBusy(true);
     setMessage(null);
 
@@ -425,38 +457,64 @@ export function GameScreen() {
       setMessage('حدث خطأ غير متوقع، حاول رمي النرد مرة أخرى');
       setPendingBuy(null);
       setIsBusy(false);
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 
+  /**
+   * Bug 3 (السبب الفعلي المؤكَّد): الكتابة الجوهرية (updatePlayerState) وكتابة
+   * السجل غير الحرجة (logEvent) كانتا بنفس try/catch — فلو نجحت الكتابة الجوهرية
+   * لكن كتابة السجل بعدها فشلت لأي سبب (تعارض مؤقت، تأخر شبكة، إلخ)، كانت رسالة
+   * "تعذّر إتمام الشراء" تظهر رغم إن الشراء نفسه نجح فعلياً ونُقل بالفعل. الإصلاح:
+   * فصل معالجة الخطأ تماماً — فشل الكتابة الجوهرية فقط هو ما يُعتبر "فشل شراء".
+   */
   async function handleBuyAccept() {
-    if (!pendingBuy || !roomId || !snapshot) return;
-    try {
-      const othersBeforeMove = snapshot.players.filter((player) => player.id !== pendingBuy.movedPlayer.id);
-      const roster = [...othersBeforeMove, pendingBuy.movedPlayer];
-      const tile = BOARD_TILES.find((candidate) => candidate.id === pendingBuy.tileId);
-      const result = buyProperty(pendingBuy.movedPlayer, roster, pendingBuy.tileId);
+    if (!pendingBuy || !roomId || !snapshot || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    const othersBeforeMove = snapshot.players.filter((player) => player.id !== pendingBuy.movedPlayer.id);
+    const roster = [...othersBeforeMove, pendingBuy.movedPlayer];
+    const tile = BOARD_TILES.find((candidate) => candidate.id === pendingBuy.tileId);
+    const result = buyProperty(pendingBuy.movedPlayer, roster, pendingBuy.tileId);
+    let finalPlayer = pendingBuy.movedPlayer;
 
-      let finalPlayer = pendingBuy.movedPlayer;
+    try {
       if (result.success) {
         finalPlayer = result.player;
-        await gameRepository.updatePlayerState(roomId, result.player);
-        if (tile) {
-          await gameRepository.logEvent(roomId, {
-            type: 'property-bought',
-            playerId: result.player.id,
-            playerNickname: result.player.nickname,
-            tileId: tile.id,
-            tileName: tile.name,
-            price: 'purchasePrice' in tile ? tile.purchasePrice : 0,
-          });
-        }
+        await gameRepository.updatePlayerState(roomId, result.player); // الكتابة الجوهرية — فشلها فقط = فشل شراء حقيقي
       } else {
         setMessage(BUY_FAILURE_MESSAGES[result.reason]);
       }
-
-      const consecutiveDoubles = pendingBuy.consecutiveDoubles;
+    } catch (error) {
+      console.error('handleBuyAccept: فشلت الكتابة الجوهرية فعلياً', error);
+      setMessage('تعذّر إتمام الشراء بسبب خطأ غير متوقع، حاول لاحقاً');
       setPendingBuy(null);
+      setAuctionPending(null);
+      setIsBusy(false);
+      actionInFlightRef.current = false;
+      throw error; // إعادة الرمي مقصودة: BuyPropertyModal.handleBuyClick يلتقطها لعرض رسالته الخاصة أيضاً
+    }
 
+    // كتابة السجل غير حرجة — فشلها لا يعني فشل الشراء (اللي نجح فعلياً بالأعلى)، فمعالجتها منفصلة تماماً ولا تُظهر أي رسالة فشل للاعب
+    if (result.success && tile) {
+      try {
+        await gameRepository.logEvent(roomId, {
+          type: 'property-bought',
+          playerId: result.player.id,
+          playerNickname: result.player.nickname,
+          tileId: tile.id,
+          tileName: tile.name,
+          price: 'purchasePrice' in tile ? tile.purchasePrice : 0,
+        });
+      } catch (logError) {
+        console.error('handleBuyAccept: فشل تسجيل الحدث بالسجل (غير حرج، الشراء نفسه نجح)', logError);
+      }
+    }
+
+    const consecutiveDoubles = pendingBuy.consecutiveDoubles;
+    setPendingBuy(null);
+
+    try {
       if (consecutiveDoubles > 0) {
         await performRoll(finalPlayer, consecutiveDoubles);
       } else {
@@ -464,20 +522,17 @@ export function GameScreen() {
         setIsBusy(false);
       }
     } catch (error) {
-      // Bug 3: أي خطأ هنا (مثلاً كتابة Firestore فشلت) يُصفّر pendingBuy فوراً —
-      // BuyPropertyModal يرصد تغيّر tile?.id ويصفّر "جاري الشراء" تلقائياً من جهته،
-      // وهنا نصفّر isBusy لضمان رجوع زر رمي النرد تفاعلياً كذلك.
-      console.error('handleBuyAccept failed', error);
-      setMessage('تعذّر إتمام الشراء بسبب خطأ غير متوقع، حاول لاحقاً');
-      setPendingBuy(null);
-      setAuctionPending(null);
+      console.error('handleBuyAccept: فشل استئناف الدور بعد الشراء', error);
+      setMessage('حدث خطأ بعد الشراء، حاول رمي النرد إن ظهر الزر');
       setIsBusy(false);
-      throw error; // إعادة الرمي مقصودة: BuyPropertyModal.handleBuyClick يلتقطها لعرض رسالته الخاصة أيضاً
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 
   async function handleBuySkip() {
-    if (!pendingBuy || !roomId || !snapshot) return;
+    if (!pendingBuy || !roomId || !snapshot || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     const { movedPlayer, consecutiveDoubles, tileId } = pendingBuy;
     setPendingBuy(null);
 
@@ -491,6 +546,8 @@ export function GameScreen() {
       setMessage('تعذّر بدء المزاد بسبب خطأ غير متوقع');
       setAuctionPending(null);
       setIsBusy(false);
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 
@@ -522,12 +579,13 @@ export function GameScreen() {
   }
 
   async function handleAuctionBid(amount: number) {
-    if (!roomId || !snapshot?.activeAuction || !me) return;
+    if (!roomId || !snapshot?.activeAuction || !me || actionInFlightRef.current) return;
     const result = placeBid(snapshot.activeAuction, snapshot.players, me.id, amount);
     if (!result.success) {
       setMessage(AUCTION_BID_FAILURE_MESSAGES[result.reason]);
       return;
     }
+    actionInFlightRef.current = true;
     try {
       if (isAuctionOver(result.auction)) {
         await finishAuction(result.auction);
@@ -537,16 +595,19 @@ export function GameScreen() {
     } catch (error) {
       console.error('handleAuctionBid failed', error);
       setMessage('تعذّرت المزايدة بسبب خطأ غير متوقع، حاول مرة أخرى');
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 
   async function handleAuctionPass() {
-    if (!roomId || !snapshot?.activeAuction || !me) return;
+    if (!roomId || !snapshot?.activeAuction || !me || actionInFlightRef.current) return;
     const result = passBid(snapshot.activeAuction, me.id);
     if (!result.success) {
       setMessage(AUCTION_PASS_FAILURE_MESSAGES[result.reason]);
       return;
     }
+    actionInFlightRef.current = true;
     try {
       if (isAuctionOver(result.auction)) {
         await finishAuction(result.auction);
@@ -556,14 +617,17 @@ export function GameScreen() {
     } catch (error) {
       console.error('handleAuctionPass failed', error);
       setMessage('تعذّر تسجيل الانسحاب بسبب خطأ غير متوقع، حاول مرة أخرى');
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 
   async function handleUseGetOutOfJailFree() {
-    if (!me || !roomId || !snapshot || isBusy) return;
+    if (!me || !roomId || !snapshot || isBusy || actionInFlightRef.current) return;
     const deckType = holdsGetOutOfJailFree(snapshot.deckState, me.id);
     if (!deckType || !me.isInJail) return;
 
+    actionInFlightRef.current = true;
     try {
       const releasedPlayer = me.releaseFromJail();
       await gameRepository.updatePlayerState(roomId, releasedPlayer);
@@ -572,27 +636,42 @@ export function GameScreen() {
     } catch (error) {
       console.error('handleUseGetOutOfJailFree failed', error);
       setMessage('تعذّر استخدام البطاقة بسبب خطأ غير متوقع، حاول مرة أخرى');
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 
   async function handleBuild(tileId: number) {
-    if (!me || !roomId || isBusy) return;
-    const tile = BOARD_TILES.find((candidate) => candidate.id === tileId);
-    const result = buildOnProperty(me, tileId);
-    if (result.success) {
-      await gameRepository.updatePlayerState(roomId, result.player);
-      if (tile) {
-        await gameRepository.logEvent(roomId, {
-          type: 'property-built',
-          playerId: result.player.id,
-          playerNickname: result.player.nickname,
-          tileId: tile.id,
-          tileName: tile.name,
-          newLevel: result.player.buildLevels[tileId] ?? 0,
-        });
+    if (!me || !roomId || isBusy || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    try {
+      const tile = BOARD_TILES.find((candidate) => candidate.id === tileId);
+      const result = buildOnProperty(me, tileId);
+      if (result.success) {
+        await gameRepository.updatePlayerState(roomId, result.player);
+        if (tile) {
+          try {
+            await gameRepository.logEvent(roomId, {
+              type: 'property-built',
+              playerId: result.player.id,
+              playerNickname: result.player.nickname,
+              tileId: tile.id,
+              tileName: tile.name,
+              newLevel: result.player.buildLevels[tileId] ?? 0,
+            });
+          } catch (logError) {
+            // Bug 3 نفس النمط: فشل تسجيل السجل غير حرج، لا يعني فشل البناء نفسه
+            console.error('handleBuild: فشل تسجيل الحدث بالسجل (غير حرج)', logError);
+          }
+        }
+      } else {
+        setMessage(BUILD_FAILURE_MESSAGES[result.reason]);
       }
-    } else {
-      setMessage(BUILD_FAILURE_MESSAGES[result.reason]);
+    } catch (error) {
+      console.error('handleBuild: فشلت الكتابة الجوهرية فعلياً', error);
+      setMessage('تعذّر إتمام البناء بسبب خطأ غير متوقع، حاول مرة أخرى');
+    } finally {
+      actionInFlightRef.current = false;
     }
   }
 

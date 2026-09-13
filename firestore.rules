@@ -54,7 +54,7 @@ service cloud.firestore {
 
     function hasOnlyAllowedPlayerFields(data) {
       return data.keys().hasOnly(
-        ['nickname', 'tokenColor', 'money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels', 'jailTurnsElapsed', 'joinedAt']
+        ['nickname', 'tokenColor', 'money', 'position', 'ownedTileIds', 'isInJail', 'isBankrupt', 'buildLevels', 'jailTurnsElapsed', 'joinedAt', 'hasConfirmedColor']
       );
     }
 
@@ -67,7 +67,8 @@ service cloud.firestore {
     }
 
     function isProfileOnlyUpdate() {
-      return changedKeys().hasOnly(['nickname', 'tokenColor']);
+      // Bug 6: تأكيد اللون (confirmPlayerColor) يغيّر الحقلين معاً بنفس الكتابة
+      return changedKeys().hasOnly(['nickname', 'tokenColor', 'hasConfirmedColor']);
     }
 
     function isGameplayUpdate() {
@@ -188,7 +189,8 @@ service cloud.firestore {
           && request.resource.data.ownedTileIds.size() == 0
           && request.resource.data.isInJail == false
           && request.resource.data.isBankrupt == false
-          && request.resource.data.jailTurnsElapsed == 0;
+          && request.resource.data.jailTurnsElapsed == 0
+          && request.resource.data.hasConfirmedColor == false;
 
         allow update: if isAuthenticated()
           && hasOnlyAllowedPlayerFields(request.resource.data)
@@ -198,6 +200,7 @@ service cloud.firestore {
           && isValidOwnedTiles(request.resource.data.ownedTileIds)
           && request.resource.data.isInJail is bool
           && isValidJailTurnsElapsed(request.resource.data.jailTurnsElapsed)
+          && request.resource.data.hasConfirmedColor is bool
           && isMoneyDeltaBounded(resource.data.money, request.resource.data.money)
           && (
                (isOwner(playerId) && isProfileOnlyUpdate())

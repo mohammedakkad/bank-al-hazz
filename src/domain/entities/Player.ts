@@ -12,6 +12,11 @@ export interface PlayerProps {
   readonly buildLevels: Readonly<Record<number, number>>;
   /** عدد الأدوار المتتالية اللي قضاها اللاعب بالسجن بدون ما يطلع منه (يُصفَّر عند الدخول والخروج) */
   readonly jailTurnsElapsed: number;
+  /**
+   * Bug 6: هل اللاعب أكّد لون رمزه صراحة بشاشة اللوبي (وليس مجرد اللون الافتراضي
+   * المؤقت وقت الانضمام). "ابدأ اللعبة" بـLobbyRoomScreen معطّل لحد ما الكل يؤكّد.
+   */
+  readonly hasConfirmedColor: boolean;
 }
 
 /**
@@ -34,6 +39,7 @@ export class Player {
       isBankrupt: false,
       buildLevels: {},
       jailTurnsElapsed: 0,
+      hasConfirmedColor: false,
     });
   }
 
@@ -47,6 +53,7 @@ export class Player {
   get isBankrupt() { return this.props.isBankrupt; }
   get buildLevels() { return this.props.buildLevels; }
   get jailTurnsElapsed() { return this.props.jailTurnsElapsed; }
+  get hasConfirmedColor() { return this.props.hasConfirmedColor; }
 
   moveTo(newPosition: number): Player {
     return new Player({ ...this.props, position: newPosition });
@@ -55,6 +62,14 @@ export class Player {
   /** إضافة لتفادي تصادم لون الرمز بين لاعبين بنفس الغرفة (انظر joinGame بـFirestoreGameRepository) */
   withTokenColor(newTokenColor: string): Player {
     return new Player({ ...this.props, tokenColor: newTokenColor });
+  }
+
+  /**
+   * Bug 6: اختيار صريح للاعب نفسه بشاشة اللوبي (وليس إعادة تعيين تلقائية صامتة كـwithTokenColor).
+   * يُستخدم فقط بعد نجاح معاملة compare-and-set بـFirestoreGameRepository.confirmPlayerColor.
+   */
+  confirmTokenColor(newTokenColor: string): Player {
+    return new Player({ ...this.props, tokenColor: newTokenColor, hasConfirmedColor: true });
   }
 
   receive(amount: Money): Player {

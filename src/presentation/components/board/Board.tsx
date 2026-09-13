@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { BOARD_TILES } from '../../../domain/entities/BoardTile';
 import type { Player } from '../../../domain/entities/Player';
-import { BOARD_GRID_SIZE, TILE_GRID_POSITIONS, isCornerTile } from '../../../shared/utils/boardLayout';
+import { getTileBoxPercent, isCornerTile } from '../../../shared/utils/boardLayout';
 import { BoardTile } from './BoardTile';
 import { PlayerToken } from './PlayerToken';
 import { CenterPanel } from './CenterPanel';
@@ -64,38 +64,24 @@ export function Board({ players, ownershipByTileId, currentPlayerId, onTileSelec
   return (
     <div
       /**
-       * dir="ltr" هنا مقصود ومهم: الصفحة كاملة dir="rtl" (index.html)، وCSS Grid يفسّر
-       * أرقام الأعمدة الصريحة (gridColumn: 1..11) بالنسبة لحافة "البداية المنطقية"،
-       * وهذه الحافة في RTL هي اليمين الفعلي وليس اليسار. بما إن TILE_GRID_POSITIONS
-       * (boardLayout.ts) يحسب col=1 على أساس إنه أقصى اليسار الفعلي (كما لو كانت
-       * الحاوية LTR)، فبدون هذا الـdir الصريح كانت اللوحة كلها تُعرض معكوسة أفقياً
-       * مقارنة بما يحسبه boardLayout.ts — وهذا بالضبط ما كان يُظهر رمز اللاعب الجديد
-       * عند "وقوف حر" (أعلى اليمين فعلياً) بدل "البداية" (أسفل اليمين فعلياً) لأي عين
-       * تراقب اللوحة بافتراض اتجاه القراءة العربي الطبيعي. عزل هذه الحاوية بـdir="ltr"
-       * يضمن إن عمود 1 = أقصى اليسار الفعلي دائماً، بغض النظر عن اتجاه الصفحة المحيطة —
-       * وهو نفس الحل المتّبع لأي شبكة/خريطة/رسم بياني داخل واجهة RTL.
+       * Bug 1 (الإصلاح الجذري): ما عاد فيه أي اعتماد على CSS Grid line numbers ولا
+       * على أي خاصية اتجاهية (dir/direction) إطلاقاً — كل موضع (مربعات ورموز) يُحسب
+       * بـleft/top فيزيائية بحتة عبر getTileBoxPercent/getTileCenterPercent
+       * (boardLayout.ts)، وهما المصدر الوحيد لأي إحداثي بهذا المكوّن. لا حاجة لـ
+       * dir="ltr" بعد الآن لأن left/top لا تتأثران بـdirection من الأساس.
        */
-      dir="ltr"
-      className="mx-auto grid aspect-square w-full max-w-3xl gap-0 bg-board-bg p-2 sm:p-4"
-      style={{
-        gridTemplateColumns: `repeat(${BOARD_GRID_SIZE}, 1fr)`,
-        gridTemplateRows: `repeat(${BOARD_GRID_SIZE}, 1fr)`,
-      }}
+      className="relative mx-auto aspect-square w-full max-w-3xl bg-board-bg p-2 sm:p-4"
       role="group"
       aria-label="لوحة اللعبة"
     >
       <CenterPanel currentPlayerNickname={currentPlayerNickname} />
 
       {BOARD_TILES.map((tile) => {
-        const gridPosition = TILE_GRID_POSITIONS.get(tile.id);
-        if (!gridPosition) return null;
+        const box = getTileBoxPercent(tile.id);
         const ownership = ownershipByTileId?.get(tile.id);
 
         return (
-          <div
-            key={tile.id}
-            style={{ gridRow: gridPosition.row, gridColumn: gridPosition.col }}
-          >
+          <div key={tile.id} className="absolute" style={box}>
             <BoardTile
               tile={tile}
               isCorner={isCornerTile(tile.id)}

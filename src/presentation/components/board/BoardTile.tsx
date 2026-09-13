@@ -23,7 +23,7 @@ function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }
       aria-pressed={isSelected}
       aria-label={tile.name}
       className={[
-        'relative flex flex-col overflow-hidden bg-board-tile',
+        'relative flex h-full w-full flex-col overflow-hidden bg-board-tile',
         'transition-colors duration-150 ease-out',
         'hover:bg-[#1D2740] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400',
         isSelected ? 'ring-2 ring-amber-400 ring-inset z-10' : '',
@@ -70,11 +70,18 @@ function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }
       )}
 
       {ownerColor && (
-        <span
-          className="absolute bottom-0.5 right-0.5 h-1.5 w-1.5 rounded-full sm:h-2 sm:w-2"
-          style={{ backgroundColor: ownerColor }}
+        // Bug 4: شارة "علم ملكية" مثلّثة بزاوية المربع — شكل مختلف كلياً عن دبّوس
+        // اللاعب الدائري بمنتصف المربع (PlayerToken.tsx)، فلا يلتبس أحدهما بالآخر
+        // حتى لو تطابق اللون صدفة، ويبقى ظاهراً حتى لو وقف لاعب فوق نفس المربع
+        // لأنه مثبّت بزاوية المربع نفسها وليس بمنتصفه.
+        <svg
+          viewBox="0 0 16 16"
           aria-hidden="true"
-        />
+          className="absolute left-0 top-0 h-3 w-3 sm:h-4 sm:w-4"
+          style={{ filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.5))' }}
+        >
+          <path d="M0 0h16L0 16V0z" fill={ownerColor} stroke="white" strokeWidth="0.75" />
+        </svg>
       )}
     </button>
   );

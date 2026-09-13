@@ -13,6 +13,8 @@ export interface PlayerDocument {
   readonly buildLevels: Readonly<Record<number, number>>;
   readonly jailTurnsElapsed: number;
   readonly joinedAt: FieldValue | number;
+  /** إضافة Bug 6 — قد لا يوجد بمستندات لاعبين قديمين؛ يُقرأ بـ`?? false` دائماً */
+  readonly hasConfirmedColor?: boolean;
 }
 
 export function playerToDocument(player: Player, joinedAt: FieldValue): PlayerDocument {
@@ -26,6 +28,7 @@ export function playerToDocument(player: Player, joinedAt: FieldValue): PlayerDo
     isBankrupt: player.isBankrupt,
     buildLevels: player.buildLevels,
     jailTurnsElapsed: player.jailTurnsElapsed,
+    hasConfirmedColor: player.hasConfirmedColor,
     joinedAt,
   };
 }
@@ -48,6 +51,7 @@ export function playerToStateUpdate(player: Player): PlayerStateUpdate {
     isBankrupt: player.isBankrupt,
     buildLevels: player.buildLevels,
     jailTurnsElapsed: player.jailTurnsElapsed,
+    hasConfirmedColor: player.hasConfirmedColor,
   };
 }
 
@@ -86,6 +90,10 @@ export function documentToPlayer(playerId: string, doc: PlayerDocument): Player 
 
   if (doc.isBankrupt) {
     player = player.pay(Money.zero());
+  }
+
+  if (doc.hasConfirmedColor) {
+    player = player.confirmTokenColor(doc.tokenColor);
   }
 
   return player;
