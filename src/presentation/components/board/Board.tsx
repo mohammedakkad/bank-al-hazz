@@ -70,7 +70,7 @@ export function Board({ players, ownershipByTileId, currentPlayerId, onTileSelec
        * (boardLayout.ts)، وهما المصدر الوحيد لأي إحداثي بهذا المكوّن. لا حاجة لـ
        * dir="ltr" بعد الآن لأن left/top لا تتأثران بـdirection من الأساس.
        */
-      className="relative mx-auto aspect-square w-full max-w-3xl bg-board-bg p-2 sm:p-4"
+      className="relative mx-auto aspect-square w-full max-w-4xl bg-board-bg p-2 sm:p-4"
       role="group"
       aria-label="لوحة اللعبة"
     >

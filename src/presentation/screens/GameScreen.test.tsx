@@ -17,6 +17,8 @@ vi.mock('../../domain/gameRules/DiceRoller', () => ({
   rollDice: vi.fn(() => ({ die1: 4, die2: 5, total: 9, isDouble: false })),
 }));
 
+import { rollDice } from '../../domain/gameRules/DiceRoller';
+
 function makeMockRepository(): IGameRepository & {
   emitSnapshot: (snapshot: GameSnapshot) => void;
 } {
@@ -150,5 +152,75 @@ describe('GameScreen — Bug 2 & Bug 3 regression', () => {
     // تأكيد إضافي: الشراء نجح فعلياً (العقار انتقل لملكية اللاعب بالكتابة المرسَلة لـupdatePlayerState)
     const updatedPlayerArg = (repo.updatePlayerState as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as Player;
     expect(updatedPlayerArg.ownsTile(9)).toBe(true);
+  }, 10000);
+});
+
+describe('GameScreen — Bug 3 regression: الدور لازم يمرّ فعلياً لكل رمية غير doubles', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  /**
+   * إعادة إنتاج مباشرة لسجل الحدث الحقيقي المرفَق بالتقرير: لاعب يرمي نرداً غير
+   * متطابق (non-double) ويجب ينتقل الدور فعلياً — مرتين متتاليتين هنا لإثبات إن
+   * نفس اللاعب لا يقدر يرمي مرة ثانية بدون ما يمرّ دور اللاعب الآخر بينهما، حتى
+   * لو حقن الاختبار له سلسلة أرقام نرد جديدة تحاكي استمرار محاولة اللعب.
+   *
+   * ملاحظة أمانة: السبب الفعلي المؤكَّد لهذا الخلل كان بقواعد firestore.rules
+   * (الفرع اللي يسمح بتحديث currentPlayerId كان يتحقق من request.resource.data.keys()
+   * الكاملة بدل التغييرات الفعلية فقط changedKeys() — فبمجرد ما deckState/activeAuction
+   * صارا حقلين دائمين على مستند اللعبة (أول مزاد أو أول بطاقة تُسحب)، كل advanceTurn
+   * لاحقة كانت تُرفض بصمت). هذا الاختبار يتحقق من طبقة منطق التطبيق (GameScreen)
+   * نفسها فقط — لا يمكنه اختبار قواعد Firestore فعلياً بدون محاكي Firebase حقيقي،
+   * وهو غير متاح ببيئة التنفيذ هذه.
+   */
+  it('لاعب واحد لا يقدر يرمي مرتين متتاليتين بدون تمرير الدور فعلياً (رميات غير doubles)', async () => {
+    const repo = makeMockRepository();
+    const mm = Player.create('mm', 'Mm', '#E24B4A', Money.of(1200));
+    const vv = Player.create('vv', 'Vv', '#3BA776', Money.of(1200));
+    renderGameScreen(repo, 'mm');
+
+    // دور Mm أولاً — نرد (1 + 3 = 4، غير متطابق) → يهبط على مربع 4 (ضريبة، بدون مودال شراء)
+    vi.mocked(rollDice).mockReturnValueOnce({ die1: 1, die2: 3, total: 4, isDouble: false });
+    repo.emitSnapshot(makeSnapshot([mm, vv], { currentPlayerId: 'mm' }));
+
+    const rollButton = await screen.findByRole('button', { name: /ارمِ النرد/ });
+    fireEvent.click(rollButton);
+
+    // الدور لازم ينتقل لـVv — نتحقق إن advanceTurn استُدعيت بمعرّف Vv بالضبط (وليس Mm مرة أخرى)
+    await waitFor(() => {
+      expect(repo.advanceTurn).toHaveBeenCalledWith('room1', 'vv');
+    });
+    expect(repo.advanceTurn).toHaveBeenCalledTimes(1);
+
+    // بينما الدور لسا عند Vv بحسب Firestore، زر رمي النرد يجب يبقى معطّلاً عند Mm
+    // (محاكاة: لسا ما وصل تحديث snapshot جديد يغيّر currentPlayerId فعلياً)
+    repo.emitSnapshot(
+      makeSnapshot([mm.moveTo(4), vv], { currentPlayerId: 'vv', turnNumber: 2 }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /ارمِ النرد/ })).toBeDisabled();
+    });
+
+    // النقر على الزر وهو معطّل لا يجب يُحدث أي رمية جديدة إطلاقاً — تأكيد إضافي
+    fireEvent.click(screen.getByRole('button', { name: /ارمِ النرد/ }));
+    expect(repo.advanceTurn).toHaveBeenCalledTimes(1); // لسا نفس العدد، ما زاد
+
+    // الآن دور Vv انتهى فعلياً بمكان آخر (خارج هذا العميل) ورجع الدور لـMm
+    repo.emitSnapshot(
+      makeSnapshot([mm.moveTo(4), vv.moveTo(8)], { currentPlayerId: 'mm', turnNumber: 3 }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /ارمِ النرد/ })).toBeEnabled();
+    });
+
+    // رمية ثانية غير متطابقة لـMm (2 + 4 = 6) — تهبط على السجن/زيارة فقط (بدون مودال شراء)، ولازم تمرّ الدور لـVv مرة أخرى، وليس تعيد نفسها لـMm
+    vi.mocked(rollDice).mockReturnValueOnce({ die1: 2, die2: 4, total: 6, isDouble: false });
+    fireEvent.click(screen.getByRole('button', { name: /ارمِ النرد/ }));
+
+    await waitFor(() => {
+      expect(repo.advanceTurn).toHaveBeenCalledTimes(2);
+    });
+    expect(repo.advanceTurn).toHaveBeenNthCalledWith(2, 'room1', 'vv');
   }, 10000);
 });

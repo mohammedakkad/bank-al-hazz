@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check } from 'lucide-react';
@@ -20,7 +20,18 @@ export function LobbyRoomScreen() {
   const [isStarting, setIsStarting] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [colorError, setColorError] = useState<string | null>(null);
-  const [isConfirmingColor, setIsConfirmingColor] = useState(false);
+  /**
+   * Bug 1 (السبب الفعلي المؤكَّد): لم يكن فيه أي تحديث تفاؤلي إطلاقاً — الشارة
+   * (swatch) كانت تعكس فقط `me.tokenColor`/`hasConfirmedColor` القادمين من
+   * snapshot Firestore، فالضغطة كانت "منتظرة" بصرياً لحد اكتمال round-trip كامل
+   * (معاملة compare-and-set تقرأ كل مستندات اللاعبين الآخرين ثم تكتب) — وهذا فعلياً
+   * مئات الميلي ثانية محسوسة كتجمّد. الإصلاح: حالة محلية تفاؤلية تنعكس فوراً
+   * بالضغط، وتُصحَّح لاحقاً بالخلفية (تُصفَّر تلقائياً بمجرد وصول التأكيد الحقيقي
+   * من Firestore، أو تُلغى وتظهر رسالة خطأ فقط لو خسر اللاعب فعلياً سباق التوقيت).
+   */
+  const [optimisticColor, setOptimisticColor] = useState<string | null>(null);
+  /** آخر لون طلبه المستخدم فعلياً — يمنع نتيجة معاملة قديمة متأخرة من الكتابة فوق ضغطة أحدث */
+  const latestRequestedColorRef = useRef<string | null>(null);
 
   // اشتراك حي واحد فقط لهذه الشاشة — يغذي كل من قائمة اللاعبين وإشارة بدء اللعبة معًا
   useEffect(() => {
@@ -38,6 +49,14 @@ export function LobbyRoomScreen() {
     }, START_TRANSITION_MS);
     return () => window.clearTimeout(timeout);
   }, [snapshot?.status, roomId, navigate]);
+
+  // بمجرد ما snapshot الحقيقي يطابق آخر لون تفاؤلي طلبناه، نصفّره — ما عاد فيه داعي له
+  useEffect(() => {
+    const me = snapshot?.players.find((player) => player.id === userId) ?? null;
+    if (me?.hasConfirmedColor && me.tokenColor === optimisticColor) {
+      setOptimisticColor(null);
+    }
+  }, [snapshot, userId, optimisticColor]);
 
   async function handleStartGame() {
     if (!roomId || isStarting) return;
@@ -58,20 +77,25 @@ export function LobbyRoomScreen() {
    * المعروضة (منتزع/متاح) نفسها بترجع صح تلقائياً بمجرد وصول تحديث الاشتراك.
    */
   async function handleSelectColor(color: string) {
-    if (!roomId || !userId || isConfirmingColor) return;
-    setIsConfirmingColor(true);
+    if (!roomId || !userId) return;
     setColorError(null);
+    setOptimisticColor(color); // فوري — ما فيه أي انتظار لشبكة قبل هذا السطر
+    latestRequestedColorRef.current = color;
+
     try {
       await gameRepository.confirmPlayerColor(roomId, userId, color);
+      // نجاح: useEffect تحت بيصفّر optimisticColor تلقائياً بمجرد ما snapshot يعكس نفس اللون فعلياً
     } catch (error) {
+      // لو المستخدم ضغط لوناً آخر بالمدة اللي انتظرنا فيها الشبكة، هذا الخطأ يخص طلباً قديماً — تجاهله
+      if (latestRequestedColorRef.current !== color) return;
+
+      setOptimisticColor(null);
       if (error instanceof ColorAlreadyTakenError) {
         setColorError('هذا اللون تم اختياره للتو، اختر لوناً آخر');
       } else {
         console.error('confirmPlayerColor failed', error);
         setColorError('تعذّر تأكيد اللون، حاول مرة أخرى');
       }
-    } finally {
-      setIsConfirmingColor(false);
     }
   }
 
@@ -136,8 +160,10 @@ export function LobbyRoomScreen() {
               const takenBy = players.find(
                 (player) => player.tokenColor === color && player.hasConfirmedColor && player.id !== me.id,
               );
-              const isMine = me.tokenColor === color && me.hasConfirmedColor;
-              const isDisabled = Boolean(takenBy) || isConfirmingColor;
+              // أثناء انتظار تأكيد Firestore، اللون التفاؤلي هو مصدر الحقيقة البصري —
+              // وإلا نرجع للون الحقيقي المؤكَّد من snapshot (Bug 1: هذا بالضبط ما كان ناقصاً)
+              const isMine = optimisticColor ? optimisticColor === color : me.tokenColor === color && me.hasConfirmedColor;
+              const isDisabled = Boolean(takenBy);
 
               return (
                 <button

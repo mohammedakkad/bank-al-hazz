@@ -149,7 +149,7 @@ service cloud.firestore {
         && (
              (
                request.auth.uid == resource.data.currentPlayerId
-               && request.resource.data.keys().hasOnly(['status', 'currentPlayerId', 'turnNumber'])
+               && changedKeys().hasOnly(['status', 'currentPlayerId', 'turnNumber'])
                && isValidStatus(request.resource.data.status)
                && isValidStatusTransition(resource.data.status, request.resource.data.status)
                && request.resource.data.currentPlayerId is string

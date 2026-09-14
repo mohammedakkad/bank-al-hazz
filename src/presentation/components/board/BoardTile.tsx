@@ -45,27 +45,36 @@ function BoardTileComponent({ tile, isCorner, ownerColor, isSelected, onSelect }
 
       {isProperty ? (
         <span className="flex flex-1 flex-col items-center justify-center gap-0.5 px-0.5 text-center">
-          <span aria-hidden="true" className="text-[10px] leading-none sm:text-sm">
+          <span aria-hidden="true" className="text-xs leading-none sm:text-base">
             {tile.countryFlag}
           </span>
-          <span className="line-clamp-2 text-[7px] font-medium leading-tight text-white sm:text-[10px]">
+          {/*
+           * Bug 2 (السبب الفعلي المؤكَّد): السعر كان معروضاً فعلياً بالكود من قبل،
+           * لكن بخط 6px/9px فقط — غير مقروء عملياً على شاشة موبايل حقيقية (كل مربع
+           * ~30-70px بالعرض)، فكان يُرى وكأنه "غير موجود إطلاقاً". رفعت التسلسل
+           * الهرمي كاملاً (اسم أكبر/أوضح، سعر أصغر لكن لسا مقروء + لون كهرماني
+           * بارز بدل رمادي باهت) بدل تكبير رقم عشوائي واحد بمعزل عن الباقي.
+           */}
+          <span className="line-clamp-2 text-[9px] font-semibold leading-tight text-white sm:text-xs">
             {tile.name}
           </span>
-          <span className="text-[6px] text-gray-400 sm:text-[9px]">{tile.purchasePrice}</span>
+          <span className="text-[8px] font-bold leading-none text-amber-400 sm:text-[11px]">
+            {tile.purchasePrice}
+          </span>
         </span>
       ) : (
         <span className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
           {Icon && (
             <Icon
               aria-hidden="true"
-              className={isCorner ? 'h-5 w-5 text-amber-400 sm:h-7 sm:w-7' : 'h-3 w-3 text-amber-400 sm:h-5 sm:w-5'}
+              className={isCorner ? 'h-5 w-5 text-amber-400 sm:h-7 sm:w-7' : 'h-3.5 w-3.5 text-amber-400 sm:h-5 sm:w-5'}
             />
           )}
-          <span className={['font-medium leading-tight text-white', isCorner ? 'text-[8px] sm:text-xs' : 'text-[7px] sm:text-[10px]'].join(' ')}>
+          <span className={['font-medium leading-tight text-white', isCorner ? 'text-[9px] sm:text-xs' : 'text-[8px] sm:text-[11px]'].join(' ')}>
             {tile.name}
           </span>
           {/* Bug 2: تغذية راجعة دائمة ("لمّة" مونوبولي الكلاسيكية) إن الهبوط/المرور من هنا يمنح 200 جنيه */}
-          {isStart && <span className="text-[7px] font-bold text-amber-400 sm:text-[10px]">+200 جنيه</span>}
+          {isStart && <span className="text-[8px] font-bold text-amber-400 sm:text-[11px]">+200 جنيه</span>}
         </span>
       )}
 
