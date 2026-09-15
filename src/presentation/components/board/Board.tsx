@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { BOARD_TILES } from '../../../domain/entities/BoardTile';
 import type { Player } from '../../../domain/entities/Player';
-import { getTileBoxPercent, isCornerTile } from '../../../shared/utils/boardLayout';
+import { getTileBoxPercent, isCornerTile, getTileSide } from '../../../shared/utils/boardLayout';
 import { BoardTile } from './BoardTile';
 import { PlayerToken } from './PlayerToken';
 import { CenterPanel } from './CenterPanel';
@@ -9,6 +9,8 @@ import { CenterPanel } from './CenterPanel';
 export interface PropertyOwnership {
   readonly ownerId: string;
   readonly ownerColor: string;
+  /** إضافة Item 4 — مستوى البناء الحالي (0-5)، لرسم شارات المنازل/الفندق على المربع نفسه */
+  readonly buildLevel: number;
 }
 
 export interface BoardProps {
@@ -88,7 +90,9 @@ export function Board({ players, ownershipByTileId, currentPlayerId, onTileSelec
             <BoardTile
               tile={tile}
               isCorner={isCornerTile(tile.id)}
+              side={getTileSide(tile.id)}
               ownerColor={ownership?.ownerColor}
+              buildLevel={ownership?.buildLevel ?? 0}
               isSelected={selectedTileId === tile.id}
               onSelect={handleSelect}
             />

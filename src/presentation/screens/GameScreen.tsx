@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useGameSession } from '../hooks/useGameSession';
 import { Board, type PropertyOwnership } from '../components/board/Board';
 import { PlayerHud } from '../components/hud/PlayerHud';
+import { PlayersOverview } from '../components/hud/PlayersOverview';
 import { EventLog } from '../components/hud/EventLog';
 import { BuyPropertyModal } from '../components/modals/BuyPropertyModal';
 import { AuctionModal } from '../components/modals/AuctionModal';
@@ -186,7 +187,11 @@ export function GameScreen() {
     const map = new Map<number, PropertyOwnership>();
     for (const player of snapshot?.players ?? []) {
       for (const tileId of player.ownedTileIds) {
-        map.set(tileId, { ownerId: player.id, ownerColor: player.tokenColor });
+        map.set(tileId, {
+          ownerId: player.id,
+          ownerColor: player.tokenColor,
+          buildLevel: player.buildLevels[tileId] ?? 0,
+        });
       }
     }
     return map;
@@ -787,6 +792,8 @@ export function GameScreen() {
           currentPlayerId={snapshot.currentPlayerId ?? undefined}
         />
       </div>
+
+      <PlayersOverview players={snapshot.players} currentPlayerId={snapshot.currentPlayerId} />
 
       {message && (
         <p role="status" className="rounded-md border border-board-line bg-board-tile px-3 py-2 text-sm text-amber-300">

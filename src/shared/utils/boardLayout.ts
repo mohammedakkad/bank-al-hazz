@@ -31,8 +31,54 @@ export function isCornerTile(tileId: number): boolean {
   return tileId === 0 || tileId === 10 || tileId === 20 || tileId === 30;
 }
 
-/** حجم كل خانة كنسبة مئوية من حاوية اللوحة (100 ÷ 11 خانة) */
-export const CELL_PERCENT = 100 / BOARD_GRID_SIZE;
+export type BoardSide = 'top' | 'bottom' | 'left' | 'right';
+
+/**
+ * Item 2 — أي ضلع من أضلاع اللوحة الأربعة يقع عليه هذا المربع (مطلوب لتدوير
+ * شريط لون المجموعة ليواجه مركز اللوحة دائماً). المربعات الركنية (0/10/20/30)
+ * ترجع null لأنها ليست عقارات أصلاً (بلا شريط لون).
+ */
+export function getTileSide(tileId: number): BoardSide | null {
+  if (isCornerTile(tileId)) return null;
+  if (tileId >= 1 && tileId <= 9) return 'bottom';
+  if (tileId >= 11 && tileId <= 19) return 'left';
+  if (tileId >= 21 && tileId <= 29) return 'top';
+  if (tileId >= 31 && tileId <= 39) return 'right';
+  return null;
+}
+
+/**
+ * Item 1 — نسبة 2:1 بين المربعات الركنية والحافية، مأخوذة من قياسات لوحة حقيقية:
+ * الركن 1سم×1سم (مربّع)، والحافة 1سم×0.5سم (بعرض نصف الركن على طول المحيط، لكن
+ * بنفس عمق الركن باتجاه المركز — هذا بالضبط كيف تبني لوحة مونوبولي حقيقية:
+ * "عمق" الحلقة المحيطية ثابت حول اللوحة كلها (يساوي ضلع المربع الركني)، والمربعات
+ * الحافية أضيق بس بنفس العمق، مش مربّعات أصغر بكل الاتجاهات.
+ *
+ * بالوحدات: كل جانب = ركن(2) + 9×حافة(1) + ركن(2) = 13 وحدة إجمالاً في كل بُعد.
+ * CORNER_UNITS=2 يعطي عمقاً ثابتاً لكل المربعات (بما فيها الحافية) يساوي حجم
+ * الركن الكامل، بينما EDGE_UNITS=1 (نصف CORNER_UNITS) هو فقط عرض الحافة على
+ * طول المحيط — يطابق النسبة 2:1 المطلوبة حرفياً.
+ */
+const CORNER_UNITS = 2;
+const EDGE_UNITS = 1;
+const TOTAL_UNITS = CORNER_UNITS * 2 + EDGE_UNITS * (BOARD_GRID_SIZE - 2);
+const UNIT_PERCENT = 100 / TOTAL_UNITS;
+
+/** حجم الركن (=عمق الحلقة المحيطية الموحَّد لكل اللوحة) كنسبة مئوية */
+export const CORNER_SIZE_PERCENT = CORNER_UNITS * UNIT_PERCENT;
+/** عرض المربع الحافي على طول المحيط (نصف حجم الركن بالضبط) كنسبة مئوية */
+export const EDGE_WIDTH_PERCENT = EDGE_UNITS * UNIT_PERCENT;
+
+/** الإزاحة التراكمية لخانة رقمها slot (1..11) على طول محور المحيط */
+function perimeterOffsetPercent(slot: number): number {
+  if (slot <= 1) return 0;
+  if (slot >= BOARD_GRID_SIZE) return CORNER_SIZE_PERCENT + (BOARD_GRID_SIZE - 2) * EDGE_WIDTH_PERCENT;
+  return CORNER_SIZE_PERCENT + (slot - 2) * EDGE_WIDTH_PERCENT;
+}
+
+function perimeterSizePercent(slot: number): number {
+  return slot <= 1 || slot >= BOARD_GRID_SIZE ? CORNER_SIZE_PERCENT : EDGE_WIDTH_PERCENT;
+}
 
 export interface TileBoxPercent {
   readonly left: string;
@@ -47,44 +93,42 @@ export interface TileCenterPercent {
 }
 
 /**
- * Bug 1 (السبب الفعلي المؤكَّد بعد تتبّع كامل): كانت هناك دالة تحويل واحدة فقط
- * (computeTileGridPosition) فعلاً — لا يوجد جدول إحداثيات مكرَّر بالكود. لكن كل
- * المستهلكين (Board.tsx لرسم المربعات، PlayerToken.tsx لرسم الرموز) كانوا
- * يستخدمون هذه الإحداثيات مباشرة كأرقام خطوط CSS Grid صريحة (`gridColumn: N`)،
- * وأرقام خطوط Grid الصريحة تُفسَّر نسبة لحافة "البداية المنطقية" حسب اتجاه
- * الحاوية (direction) — وهذا المشروع RTL بالكامل. محاولة إصلاح سابقة عزلت حاوية
- * اللوحة بـdir="ltr" لتثبيت هذا الاتجاه، لكنها بقيت تعتمد على استثناء اتجاهي هش
- * (dir صريح مخالف لبقية الصفحة) بدل إزالة الاعتماد على الاتجاه نهائياً — ومن هنا
- * احتمال تكرار نفس العرض الخاطئ.
- *
- * الإصلاح الجذري هذه المرة: التحويل النهائي لموضع فعلي يعتمد فقط على خاصيتي
- * `left`/`top` الفيزيائيتين (وليس أي خاصية Grid أو logical property) — وهاتان
- * الخاصيتان لا تتأثران بـdirection إطلاقاً تحت أي ظرف بمواصفات CSS، فيُقفَل الباب
- * على هذا الصنف من الأخطاء نهائياً بدل الاعتماد على استثناء قابل للانكسار مرة أخرى.
- *
- * هذه الدالتان (getTileBoxPercent وgetTileCenterPercent) هما المصدر الوحيد
- * (single source of truth) لأي تموضع بصري على اللوحة — كل مستهلك (حالياً
- * Board.tsx وPlayerToken.tsx، وأي مستهلك مستقبلي) يجب يستدعيهما بدل حساب أي
- * إحداثيات بنفسه.
+ * المصدر الوحيد (single source of truth) لأي تموضع بصري على اللوحة — كل مستهلك
+ * (Board.tsx، PlayerToken.tsx، CenterPanel.tsx) يجب يستدعي هاتين الدالتين بدل
+ * حساب أي إحداثيات بنفسه. left/top فيزيائيتان بحتتان (لا تتأثران بـdirection
+ * إطلاقاً)، ونسبة الركن:الحافة مضبوطة 2:1 فعلياً (Item 1) عبر perimeterOffset/SizePercent.
  */
 export function getTileBoxPercent(tileId: number): TileBoxPercent {
   const position = TILE_GRID_POSITIONS.get(tileId);
   if (!position) {
     throw new Error(`getTileBoxPercent: لا يوجد موضع محسوب لمربع رقم ${tileId}`);
   }
+  const { row, col } = position;
+
+  if (row === 1 || row === BOARD_GRID_SIZE) {
+    // صف علوي أو سفلي (يشمل الزوايا): العمق ثابت = حجم الركن، والعرض يتبع العمود
+    return {
+      top: `${row === 1 ? 0 : 100 - CORNER_SIZE_PERCENT}%`,
+      height: `${CORNER_SIZE_PERCENT}%`,
+      left: `${perimeterOffsetPercent(col)}%`,
+      width: `${perimeterSizePercent(col)}%`,
+    };
+  }
+
+  // عمود يسار أو يمين (بدون الزوايا، لأنها اتغطّت أعلاه): العمق ثابت = حجم الركن، والطول يتبع الصف
   return {
-    left: `${(position.col - 1) * CELL_PERCENT}%`,
-    top: `${(position.row - 1) * CELL_PERCENT}%`,
-    width: `${CELL_PERCENT}%`,
-    height: `${CELL_PERCENT}%`,
+    left: `${col === 1 ? 0 : 100 - CORNER_SIZE_PERCENT}%`,
+    width: `${CORNER_SIZE_PERCENT}%`,
+    top: `${perimeterOffsetPercent(row)}%`,
+    height: `${perimeterSizePercent(row)}%`,
   };
 }
 
 export function getTileCenterPercent(tileId: number): TileCenterPercent | null {
-  const position = TILE_GRID_POSITIONS.get(tileId);
-  if (!position) return null;
+  if (!TILE_GRID_POSITIONS.has(tileId)) return null;
+  const box = getTileBoxPercent(tileId);
   return {
-    leftPercent: (position.col - 1) * CELL_PERCENT + CELL_PERCENT / 2,
-    topPercent: (position.row - 1) * CELL_PERCENT + CELL_PERCENT / 2,
+    leftPercent: parseFloat(box.left) + parseFloat(box.width) / 2,
+    topPercent: parseFloat(box.top) + parseFloat(box.height) / 2,
   };
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { getTilePurchasePrice, type BoardTile } from '../../../domain/entities/BoardTile';
+import type { BoardTile } from '../../../domain/entities/BoardTile';
+import { PropertyCard } from '../shared/PropertyCard';
 
 export interface BuyPropertyModalProps {
   readonly tile: BoardTile | null;
@@ -56,27 +57,15 @@ export function BuyPropertyModal({ tile, currentMoney, onBuy, onSkip }: BuyPrope
           transition={{ duration: 0.2 }}
         >
           <motion.div
-            className="w-full max-w-xs rounded-lg border border-amber-400 bg-board-tile p-4 text-white"
+            className="w-full max-w-md rounded-lg border border-amber-400 bg-board-tile p-4 text-white"
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
           >
-            <div className="mb-3 flex items-center gap-2">
-              {tile.type === 'property' && <span className="text-2xl">{tile.countryFlag}</span>}
-              <div>
-                <h3 className="font-bold">{tile.name}</h3>
-                {tile.type === 'property' && <p className="text-xs text-gray-400">{tile.region}</p>}
-              </div>
-            </div>
+            <PropertyCard tile={tile} />
 
-            <div className="mb-4 flex items-center justify-between text-sm">
-              <span className="text-gray-300">السعر</span>
-              <span className="font-bold text-amber-400">
-                {(getTilePurchasePrice(tile) ?? 0).toLocaleString('ar-EG')} جنيه
-              </span>
-            </div>
-            <div className="mb-4 flex items-center justify-between text-sm">
+            <div className="my-3 flex items-center justify-between text-sm">
               <span className="text-gray-300">رصيدك الحالي</span>
               <span className="tabular-nums">{currentMoney.toLocaleString('ar-EG')} جنيه</span>
             </div>
