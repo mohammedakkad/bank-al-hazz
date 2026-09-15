@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { PropertyTile } from '../../../domain/entities/BoardTile';
+import { getTilePurchasePrice, type BoardTile } from '../../../domain/entities/BoardTile';
 
 export interface BuyPropertyModalProps {
-  readonly tile: PropertyTile | null;
+  readonly tile: BoardTile | null;
   readonly currentMoney: number;
   readonly onBuy: () => Promise<void>;
   readonly onSkip: () => void;
@@ -63,16 +63,18 @@ export function BuyPropertyModal({ tile, currentMoney, onBuy, onSkip }: BuyPrope
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
           >
             <div className="mb-3 flex items-center gap-2">
-              <span className="text-2xl">{tile.countryFlag}</span>
+              {tile.type === 'property' && <span className="text-2xl">{tile.countryFlag}</span>}
               <div>
                 <h3 className="font-bold">{tile.name}</h3>
-                <p className="text-xs text-gray-400">{tile.region}</p>
+                {tile.type === 'property' && <p className="text-xs text-gray-400">{tile.region}</p>}
               </div>
             </div>
 
             <div className="mb-4 flex items-center justify-between text-sm">
               <span className="text-gray-300">السعر</span>
-              <span className="font-bold text-amber-400">{tile.purchasePrice.toLocaleString('ar-EG')} جنيه</span>
+              <span className="font-bold text-amber-400">
+                {(getTilePurchasePrice(tile) ?? 0).toLocaleString('ar-EG')} جنيه
+              </span>
             </div>
             <div className="mb-4 flex items-center justify-between text-sm">
               <span className="text-gray-300">رصيدك الحالي</span>

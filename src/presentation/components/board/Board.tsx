@@ -70,11 +70,14 @@ export function Board({ players, ownershipByTileId, currentPlayerId, onTileSelec
        * (boardLayout.ts)، وهما المصدر الوحيد لأي إحداثي بهذا المكوّن. لا حاجة لـ
        * dir="ltr" بعد الآن لأن left/top لا تتأثران بـdirection من الأساس.
        */
-      className="relative mx-auto aspect-square w-full max-w-4xl bg-board-bg p-2 sm:p-4"
+      className="relative mx-auto aspect-square w-full max-w-4xl bg-board-bg p-1 sm:p-4"
       role="group"
       aria-label="لوحة اللعبة"
     >
-      <CenterPanel currentPlayerNickname={currentPlayerNickname} />
+      <CenterPanel
+        currentPlayerNickname={currentPlayerNickname}
+        selectedTile={selectedTileId !== null ? (BOARD_TILES.find((tile) => tile.id === selectedTileId) ?? null) : null}
+      />
 
       {BOARD_TILES.map((tile) => {
         const box = getTileBoxPercent(tile.id);

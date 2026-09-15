@@ -1,11 +1,11 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import type { PropertyTile } from '../../../domain/entities/BoardTile';
+import type { BoardTile } from '../../../domain/entities/BoardTile';
 import type { AuctionState } from '../../../domain/interfaces/AuctionState';
 import { MIN_BID_INCREMENT } from '../../../domain/interfaces/AuctionState';
 
 export interface AuctionModalProps {
   readonly auction: AuctionState | null;
-  readonly tile: PropertyTile | null;
+  readonly tile: BoardTile | null;
   readonly myPlayerId: string;
   readonly nicknameById: ReadonlyMap<string, string>;
   readonly myMoney: number;
@@ -38,10 +38,10 @@ export function AuctionModal({ auction, tile, myPlayerId, nicknameById, myMoney,
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
           >
             <div className="mb-3 flex items-center gap-2">
-              <span className="text-2xl">{tile.countryFlag}</span>
+              {tile.type === 'property' && <span className="text-2xl">{tile.countryFlag}</span>}
               <div>
                 <h3 className="font-bold">مزاد: {tile.name}</h3>
-                <p className="text-xs text-gray-400">{tile.region}</p>
+                {tile.type === 'property' && <p className="text-xs text-gray-400">{tile.region}</p>}
               </div>
             </div>
 

@@ -83,6 +83,26 @@ export function documentToLogEntry(doc: EventLogDocument): GameLogEntry | null {
         deckType: p['deckType'],
         cardText: p['cardText'],
       };
+    case 'tax-paid':
+      if (typeof p['playerNickname'] !== 'string' || typeof p['tileId'] !== 'number' || typeof p['tileName'] !== 'string' || typeof p['amount'] !== 'number') return null;
+      return {
+        type: 'tax-paid',
+        playerId: doc.playerId,
+        playerNickname: p['playerNickname'],
+        tileId: p['tileId'],
+        tileName: p['tileName'],
+        amount: p['amount'],
+      };
+    case 'property-sold':
+      if (typeof p['playerNickname'] !== 'string' || typeof p['tileId'] !== 'number' || typeof p['tileName'] !== 'string' || typeof p['refundAmount'] !== 'number') return null;
+      return {
+        type: 'property-sold',
+        playerId: doc.playerId,
+        playerNickname: p['playerNickname'],
+        tileId: p['tileId'],
+        tileName: p['tileName'],
+        refundAmount: p['refundAmount'],
+      };
     default:
       return null;
   }

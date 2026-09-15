@@ -1,6 +1,6 @@
 import { Player } from '../../domain/entities/Player';
 import { Money } from '../../domain/valueObjects/Money';
-import { BOARD_TILES } from '../../domain/entities/BoardTile';
+import { BOARD_TILES, isBuyableTile, getTilePurchasePrice } from '../../domain/entities/BoardTile';
 
 export type BuyPropertyFailureReason = 'not-a-property' | 'already-owned' | 'insufficient-funds';
 
@@ -15,6 +15,11 @@ export type BuyPropertyOutcome =
  * allPlayers مطلوبة (مو فقط buyer) لأن ملكية العقار موزّعة بين اللاعبين أنفسهم
  * (Player.ownedTileIds) وليست حقلاً مركزياً بمستند اللعبة — لازم نفحص كل اللاعبين
  * للتأكد إن حدا ثاني ما يملك نفس العقار أصلاً.
+ *
+ * Item 3 (إصلاح فجوة حقيقية): كانت هذه الدالة ترفض أي مربع type !== 'property'
+ * كلياً — أي إن المطارات وشركات المرافق (isBuyableTile لكن ليست 'property') ما
+ * كانت قابلة للشراء إطلاقاً رغم امتلاكها سعراً بالبيانات أحياناً لاحقاً. الآن
+ * تشمل أي مربع isBuyableTile، بسعره الفعلي عبر getTilePurchasePrice.
  */
 export function buyProperty(
   buyer: Player,
@@ -22,7 +27,8 @@ export function buyProperty(
   tileId: number,
 ): BuyPropertyOutcome {
   const tile = BOARD_TILES.find((candidate) => candidate.id === tileId);
-  if (!tile || tile.type !== 'property') {
+  const price = tile ? getTilePurchasePrice(tile) : null;
+  if (!tile || !isBuyableTile(tile) || price === null) {
     return { success: false, reason: 'not-a-property' };
   }
 
@@ -31,11 +37,11 @@ export function buyProperty(
     return { success: false, reason: 'already-owned' };
   }
 
-  const price = Money.of(tile.purchasePrice);
-  if (!buyer.money.isGreaterThanOrEqual(price)) {
+  const priceMoney = Money.of(price);
+  if (!buyer.money.isGreaterThanOrEqual(priceMoney)) {
     return { success: false, reason: 'insufficient-funds' };
   }
 
-  const updatedBuyer = buyer.pay(price).acquireProperty(tileId);
+  const updatedBuyer = buyer.pay(priceMoney).acquireProperty(tileId);
   return { success: true, player: updatedBuyer };
 }

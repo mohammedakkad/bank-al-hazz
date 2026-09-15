@@ -7,7 +7,7 @@ import { EventLog } from '../components/hud/EventLog';
 import { BuyPropertyModal } from '../components/modals/BuyPropertyModal';
 import { AuctionModal } from '../components/modals/AuctionModal';
 import { CardModal } from '../components/modals/CardModal';
-import { BOARD_TILES, type PropertyTile } from '../../domain/entities/BoardTile';
+import { BOARD_TILES, isBuyableTile, type PropertyTile } from '../../domain/entities/BoardTile';
 import type { Card, DeckType } from '../../domain/entities/Card';
 import { Money } from '../../domain/valueObjects/Money';
 import type { Player } from '../../domain/entities/Player';
@@ -31,7 +31,10 @@ import {
   type PassFailureReason,
 } from '../../application/useCases/AuctionUseCase';
 import { payRent } from '../../application/useCases/PayRentUseCase';
+import { calculateTaxAmount } from '../../domain/gameRules/TaxRules';
 import { buildOnProperty, type BuildFailureReason } from '../../application/useCases/BuildOnPropertyUseCase';
+import { sellProperty, type SellPropertyFailureReason } from '../../application/useCases/SellPropertyUseCase';
+import { COLOR_GROUP_HEX } from '../../shared/constants/colorGroups';
 import { getNextPlayerId } from '../../domain/gameRules/TurnOrder';
 import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion';
 
@@ -61,6 +64,12 @@ const BUILD_FAILURE_MESSAGES: Record<BuildFailureReason, string> = {
   'uneven-building': 'لازم تبني بالتساوي — أكمل باقي عقارات المنطقة لنفس المستوى أول',
   'max-level': 'وصلت الحد الأقصى للبناء على هذا العقار',
   'insufficient-funds': 'رصيدك لا يكفي لتكلفة البناء',
+};
+
+const SELL_FAILURE_MESSAGES: Record<SellPropertyFailureReason, string> = {
+  'not-a-property': 'هذا المربع غير قابل للبيع',
+  'not-owned': 'لازم تملك العقار أول قبل بيعه',
+  'has-buildings': 'لازم تبيع المباني الأول',
 };
 
 const DICE_TUMBLE_MS = 550;
@@ -197,6 +206,7 @@ export function GameScreen() {
     movedPlayer: Player,
     othersBeforeMove: readonly Player[],
     consecutiveDoubles: number,
+    diceTotal: number,
   ): Promise<LandingOutcome> {
     if (!roomId) return 'continue';
     const tile = BOARD_TILES.find((candidate) => candidate.id === movedPlayer.position);
@@ -211,10 +221,31 @@ export function GameScreen() {
     }
 
     if (tile.type === 'chance' || tile.type === 'community') {
-      return resolveCardDraw(movedPlayer, othersBeforeMove, consecutiveDoubles, tile.type);
+      return resolveCardDraw(movedPlayer, othersBeforeMove, consecutiveDoubles, tile.type, diceTotal);
     }
 
-    if (tile.type !== 'property') return 'continue';
+    /**
+     * Item 3 (إصلاح فجوة حقيقية مؤكَّدة): مربعات الضريبة كانت بلا أي أثر إطلاقاً —
+     * resolveLanding ما كان يتحقق من type === 'tax' على الإطلاق، فالهبوط عليها
+     * كان بلا أي خصم مالي ولا تسجيل بالسجل رغم وجود بيانات المبلغ بـBoardTile.ts.
+     */
+    if (tile.type === 'tax') {
+      const taxAmount = calculateTaxAmount(tile);
+      const taxedPlayer = movedPlayer.pay(Money.of(taxAmount));
+      await gameRepository.updatePlayerState(roomId, taxedPlayer);
+      setMessage(`دفعت ${taxAmount} جنيه ${tile.name}`);
+      await gameRepository.logEvent(roomId, {
+        type: 'tax-paid',
+        playerId: taxedPlayer.id,
+        playerNickname: taxedPlayer.nickname,
+        tileId: tile.id,
+        tileName: tile.name,
+        amount: taxAmount,
+      });
+      return 'continue';
+    }
+
+    if (!isBuyableTile(tile)) return 'continue';
 
     const rosterAfterMove = [...othersBeforeMove, movedPlayer];
     const isOwnedByAnyone = rosterAfterMove.some((player) => player.ownsTile(tile.id));
@@ -224,7 +255,7 @@ export function GameScreen() {
       return 'awaiting-buy';
     }
 
-    const rentResult = payRent(movedPlayer, rosterAfterMove, tile.id);
+    const rentResult = payRent(movedPlayer, rosterAfterMove, tile.id, diceTotal);
     if (rentResult.success) {
       await gameRepository.updatePlayerState(roomId, rentResult.payer);
       await gameRepository.updatePlayerState(roomId, rentResult.owner);
@@ -256,6 +287,7 @@ export function GameScreen() {
     othersBeforeMove: readonly Player[],
     consecutiveDoubles: number,
     deckType: DeckType,
+    diceTotal: number,
   ): Promise<LandingOutcome> {
     if (!roomId || !snapshot) return 'continue';
 
@@ -297,7 +329,7 @@ export function GameScreen() {
       const updatedOthers = othersBeforeMove.map(
         (other) => effectResult.others.find((updated) => updated.id === other.id) ?? other,
       );
-      return resolveLanding(effectResult.player, updatedOthers, consecutiveDoubles);
+      return resolveLanding(effectResult.player, updatedOthers, consecutiveDoubles, diceTotal);
     }
 
     return 'continue';
@@ -358,7 +390,7 @@ export function GameScreen() {
 
     const nextConsecutiveDoubles = dice.isDouble ? consecutiveDoublesSoFar + 1 : 0;
     const othersBeforeMove = snapshot.players.filter((player) => player.id !== currentPlayer.id);
-    const landingOutcome = await resolveLanding(movedPlayer, othersBeforeMove, nextConsecutiveDoubles);
+    const landingOutcome = await resolveLanding(movedPlayer, othersBeforeMove, nextConsecutiveDoubles, dice.total);
 
     if (landingOutcome === 'turn-ended') {
       setIsBusy(false);
@@ -425,7 +457,7 @@ export function GameScreen() {
 
     // الخروج من السجن ما بيمنح دور إضافي حتى لو كان بـdoubles — القاعدة الرسمية صريحة بهيك
     const othersBeforeMove = snapshot.players.filter((p) => p.id !== player.id);
-    const landingOutcome = await resolveLanding(result.player, othersBeforeMove, 0);
+    const landingOutcome = await resolveLanding(result.player, othersBeforeMove, 0, result.dice.total);
     if (landingOutcome === 'turn-ended') {
       setIsBusy(false);
       return;
@@ -675,6 +707,40 @@ export function GameScreen() {
     }
   }
 
+  async function handleSell(tileId: number) {
+    if (!me || !roomId || isBusy || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    try {
+      const tile = BOARD_TILES.find((candidate) => candidate.id === tileId);
+      const result = sellProperty(me, tileId);
+      if (result.success) {
+        await gameRepository.updatePlayerState(roomId, result.player);
+        if (tile) {
+          try {
+            await gameRepository.logEvent(roomId, {
+              type: 'property-sold',
+              playerId: result.player.id,
+              playerNickname: result.player.nickname,
+              tileId: tile.id,
+              tileName: tile.name,
+              refundAmount: result.refundAmount,
+            });
+          } catch (logError) {
+            // نفس نمط handleBuild: فشل تسجيل السجل غير حرج، لا يعني فشل البيع نفسه
+            console.error('handleSell: فشل تسجيل الحدث بالسجل (غير حرج)', logError);
+          }
+        }
+      } else {
+        setMessage(SELL_FAILURE_MESSAGES[result.reason]);
+      }
+    } catch (error) {
+      console.error('handleSell: فشلت الكتابة الجوهرية فعلياً', error);
+      setMessage('تعذّر إتمام البيع بسبب خطأ غير متوقع، حاول مرة أخرى');
+    } finally {
+      actionInFlightRef.current = false;
+    }
+  }
+
   if (!roomId || !snapshot || !me) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-board-bg text-white">
@@ -687,22 +753,40 @@ export function GameScreen() {
   const myPropertyTiles: PropertyTile[] = BOARD_TILES.filter(
     (tile): tile is PropertyTile => tile.type === 'property' && me.ownsTile(tile.id),
   );
+  /**
+   * Item 3 (إصلاح خلل حرج كان سيُدخَل بهذا التعديل نفسه لولا اكتشافه): كان هذان
+   * الاستعلامان يقيّدان النتيجة بـtile.type === 'property' فقط — أي إن الهبوط
+   * على مطار أو مرفق فاضي كان سيُنتج pendingBuy فعلياً (resolveLanding) لكن
+   * pendingBuyTile يرجع null دائماً له، فالمودال ما كان يظهر أبداً وتبقى اللعبة
+   * معلّقة للأبد (isBusy=true بلا أي وسيلة للمستخدم يقرر). isBuyableTile الآن
+   * تشمل الثلاثة أنواع.
+   */
   const pendingBuyTile = pendingBuy
-    ? (BOARD_TILES.find((tile): tile is PropertyTile => tile.type === 'property' && tile.id === pendingBuy.tileId) ?? null)
+    ? (BOARD_TILES.find((tile) => isBuyableTile(tile) && tile.id === pendingBuy.tileId) ?? null)
     : null;
   const auctionTile = snapshot.activeAuction
-    ? (BOARD_TILES.find((tile): tile is PropertyTile => tile.type === 'property' && tile.id === snapshot.activeAuction?.tileId) ?? null)
+    ? (BOARD_TILES.find((tile) => isBuyableTile(tile) && tile.id === snapshot.activeAuction?.tileId) ?? null)
     : null;
   const nicknameById = new Map(snapshot.players.map((player) => [player.id, player.nickname]));
   const myGetOutOfJailFreeDeck = holdsGetOutOfJailFree(snapshot.deckState, me.id);
 
   return (
     <main className="flex min-h-screen flex-col gap-3 bg-board-bg p-3 pb-0 text-white sm:p-6 sm:pb-0">
-      <Board
-        players={snapshot.players}
-        ownershipByTileId={ownershipByTileId}
-        currentPlayerId={snapshot.currentPlayerId ?? undefined}
-      />
+      {/*
+       * Item 2 (السبب الفعلي: padding الحاوية الخارجية كان "يتنازع" مع حجم
+       * المربعات، مش نقص برقم خام بحجم المربع نفسه — كل تكبير سابق كان يُبتلع
+       * جزئياً بهذا الـpadding). على الموبايل تحديداً، نُلغي padding الأب أفقياً
+       * (-mx-3) فقط لهذه اللوحة (bleed لحافة الشاشة، نمط شائع بتطبيقات ألعاب
+       * اللوحة على الموبايل)، مع إبقاء باقي عناصر الواجهة (السجل، الرسائل)
+       * بنفس الـpadding العادي تحتها.
+       */}
+      <div className="-mx-3 sm:mx-0">
+        <Board
+          players={snapshot.players}
+          ownershipByTileId={ownershipByTileId}
+          currentPlayerId={snapshot.currentPlayerId ?? undefined}
+        />
+      </div>
 
       {message && (
         <p role="status" className="rounded-md border border-board-line bg-board-tile px-3 py-2 text-sm text-amber-300">
@@ -733,23 +817,40 @@ export function GameScreen() {
             const level = me.buildLevels[tile.id] ?? 0;
             const canAfford = me.money.isGreaterThanOrEqual(Money.of(tile.buildCost));
             const canBuild = isMyTurn && level < 5 && canAfford;
+            const canSell = isMyTurn && level === 0;
 
             return (
               <li
                 key={tile.id}
-                className="flex items-center justify-between rounded-md border border-board-line bg-board-tile px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-2 rounded-md border border-board-line bg-board-tile px-3 py-2 text-sm"
               >
-                <span>
+                <span className="flex items-center gap-2">
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: COLOR_GROUP_HEX[tile.colorGroup] }}
+                    aria-hidden="true"
+                  />
                   {tile.countryFlag} {tile.name} — مستوى {level}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => handleBuild(tile.id)}
-                  disabled={!canBuild || isBusy}
-                  className="rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-400 disabled:opacity-40"
-                >
-                  ابنِ ({tile.buildCost})
-                </button>
+                <span className="flex shrink-0 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleBuild(tile.id)}
+                    disabled={!canBuild || isBusy}
+                    className="rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-400 disabled:opacity-40"
+                  >
+                    ابنِ ({tile.buildCost})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSell(tile.id)}
+                    disabled={!canSell || isBusy}
+                    title={level > 0 ? 'لازم تبيع المباني الأول' : undefined}
+                    className="rounded-md border border-red-400 px-2 py-1 text-xs text-red-400 disabled:opacity-40"
+                  >
+                    بيع
+                  </button>
+                </span>
               </li>
             );
           })}

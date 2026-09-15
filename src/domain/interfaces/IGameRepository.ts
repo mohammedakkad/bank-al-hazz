@@ -32,6 +32,10 @@ export type GameLogEntry =
   | { readonly type: 'player-moved'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly collectedGoBonus?: boolean }
   | { readonly type: 'property-bought'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly price: number }
   | { readonly type: 'rent-paid'; readonly playerId: string; readonly playerNickname: string; readonly ownerId: string; readonly ownerNickname: string; readonly tileId: number; readonly tileName: string; readonly amount: number }
+  /** إضافة Item 3 — ضريبة مدفوعة (كان الهبوط على مربع ضريبة بلا أي أثر سابقاً) */
+  | { readonly type: 'tax-paid'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly amount: number }
+  /** إضافة Item 5 — بيع عقار غير مبني للبنك (نصف السعر، حل مؤقّت لحد نظام الرهن الكامل بـPhase C) */
+  | { readonly type: 'property-sold'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly refundAmount: number }
   | { readonly type: 'property-built'; readonly playerId: string; readonly playerNickname: string; readonly tileId: number; readonly tileName: string; readonly newLevel: number }
   /** إضافة Phase B — نتيجة مزاد منتهٍ. winnerId/winnerNickname تكون null لو ما حدا زايد */
   | { readonly type: 'property-auctioned'; readonly tileId: number; readonly tileName: string; readonly winnerId: string | null; readonly winnerNickname: string | null; readonly amount: number }

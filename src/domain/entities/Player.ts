@@ -93,6 +93,18 @@ export class Player {
     return new Player({ ...this.props, ownedTileIds: [...this.props.ownedTileIds, tileId] });
   }
 
+  /** إضافة Item 5 — يُستخدم فقط عبر SellPropertyUseCase (عقار بدون مبانٍ فقط، حسب القاعدة الرسمية) */
+  releaseProperty(tileId: number): Player {
+    const remainingBuildLevels = Object.fromEntries(
+      Object.entries(this.props.buildLevels).filter(([id]) => Number(id) !== tileId),
+    );
+    return new Player({
+      ...this.props,
+      ownedTileIds: this.props.ownedTileIds.filter((id) => id !== tileId),
+      buildLevels: remainingBuildLevels,
+    });
+  }
+
   sendToJail(): Player {
     return new Player({ ...this.props, isInJail: true, position: 10, jailTurnsElapsed: 0 });
   }

@@ -20,5 +20,9 @@ export function formatLogEntry(entry: GameLogEntry): string {
         : `انتهى مزاد ${entry.tileName} بدون فائز — بقي العقار بدون مالك`;
     case 'card-drawn':
       return `${entry.playerNickname} سحب بطاقة ${entry.deckType === 'chance' ? 'فرصة' : 'صندوق المجتمع'}: ${entry.cardText}`;
+    case 'tax-paid':
+      return `${entry.playerNickname} دفع ${entry.amount} جنيه ${entry.tileName}`;
+    case 'property-sold':
+      return `${entry.playerNickname} باع ${entry.tileName} للبنك مقابل ${entry.refundAmount} جنيه`;
   }
 }

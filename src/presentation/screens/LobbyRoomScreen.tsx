@@ -6,10 +6,17 @@ import type { GameSnapshot } from '../../domain/interfaces/IGameRepository';
 import { ColorAlreadyTakenError } from '../../domain/interfaces/IGameRepository';
 import { useGameSession } from '../hooks/useGameSession';
 import { TOKEN_COLOR_PALETTE } from '../../shared/constants/gameConfig';
+import { Spinner } from '../components/common/Spinner';
 
 const MIN_PLAYERS_TO_START = 2;
-/** مدة شاشة "اللعبة تبدأ..." — نفس القيمة لكل اللاعبين حتى ينتقلوا معًا تقريبًا بنفس اللحظة */
-const START_TRANSITION_MS = 1000;
+/**
+ * Item 1: كانت 1000ms — لم نجد أي تأخير غير ضروري حقيقي بمسار startGame نفسه
+ * (كتابة Firestore واحدة بسيطة)، لكن قصّرنا القيمة شوي لأنها بحتة تجميلية (مهلة
+ * مجاملة بس حتى كل اللاعبين يشوفوا شاشة "اللعبة تبدأ..." قبل الانتقال، مش أي
+ * انتظار وظيفي فعلي) — مع إضافة spinner فوري بالزر نفسه (تحت) يغطي الفجوة الحسّية
+ * بين الضغطة وظهور شاشة الانتقال، بدل الاعتماد على تقصير المهلة وحدها.
+ */
+const START_TRANSITION_MS = 600;
 
 export function LobbyRoomScreen() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -200,8 +207,9 @@ export function LobbyRoomScreen() {
           type="button"
           disabled={!canStart || isStarting}
           onClick={handleStartGame}
-          className="w-full rounded-md bg-amber-400 px-4 py-2 font-bold text-board-bg disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-md bg-amber-400 px-4 py-2 font-bold text-board-bg disabled:opacity-50"
         >
+          {isStarting && <Spinner className="h-4 w-4 text-board-bg" />}
           {isStarting
             ? 'جاري البدء...'
             : players.length < MIN_PLAYERS_TO_START

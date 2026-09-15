@@ -82,4 +82,46 @@ describe('payRent', () => {
     const result = payRent(payer, [payer], JERUSALEM_TILE_ID);
     expect(result).toEqual({ success: false, reason: 'self-rent' });
   });
+
+  describe('إيجار المطارات (Item 3 — كان مفقوداً كلياً)', () => {
+    const DAMASCUS_AIRPORT_ID = 5;
+    const RIYADH_AIRPORT_ID = 15;
+
+    it('مطار واحد مملوك → إيجار 25', () => {
+      const payer = makePlayer('p1');
+      const owner = makePlayer('p2').acquireProperty(DAMASCUS_AIRPORT_ID);
+      const result = payRent(payer, [payer, owner], DAMASCUS_AIRPORT_ID);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.rentAmount.value).toBe(25);
+    });
+
+    it('مطاران مملوكان لنفس اللاعب → إيجار 50 (يتضاعف حسب العدد، وليس مجموعة لونية)', () => {
+      const payer = makePlayer('p1');
+      const owner = makePlayer('p2').acquireProperty(DAMASCUS_AIRPORT_ID).acquireProperty(RIYADH_AIRPORT_ID);
+      const result = payRent(payer, [payer, owner], DAMASCUS_AIRPORT_ID);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.rentAmount.value).toBe(50);
+    });
+  });
+
+  describe('إيجار شركات المرافق (Item 3 — كان مفقوداً كلياً)', () => {
+    const ELECTRIC_UTILITY_ID = 12;
+    const WATER_UTILITY_ID = 28;
+
+    it('شركة واحدة مملوكة → الإيجار = 4× مجموع النرد', () => {
+      const payer = makePlayer('p1');
+      const owner = makePlayer('p2').acquireProperty(ELECTRIC_UTILITY_ID);
+      const result = payRent(payer, [payer, owner], ELECTRIC_UTILITY_ID, 7);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.rentAmount.value).toBe(28); // 4 × 7
+    });
+
+    it('الشركتان مملوكتان لنفس اللاعب → الإيجار = 10× مجموع النرد', () => {
+      const payer = makePlayer('p1');
+      const owner = makePlayer('p2').acquireProperty(ELECTRIC_UTILITY_ID).acquireProperty(WATER_UTILITY_ID);
+      const result = payRent(payer, [payer, owner], ELECTRIC_UTILITY_ID, 7);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.rentAmount.value).toBe(70); // 10 × 7
+    });
+  });
 });
